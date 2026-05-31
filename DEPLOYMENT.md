@@ -1,70 +1,102 @@
-# NUSphere Deployment
+# Deployment Guide
 
-This proof of concept is prepared for the services named in the proposal:
+This project is deployed using the services listed in the proposal:
 
-- Frontend: Vercel
-- Backend: Railway
-- Production database/auth target: Supabase
+- Frontend on Vercel
+- Backend on Railway
+- Supabase planned for persistent auth and database storage
 
-## 1. Railway Backend
+The frontend and backend are deployed separately because the app uses a Next.js frontend and a FastAPI backend.
 
-Create a Railway service from this repository and set the service root directory to:
+## Current Live URLs
+
+Frontend:
 
 ```text
-backend
+https://nusphere-sigma.vercel.app
 ```
 
-Railway will use `backend/railway.json` and start FastAPI with:
+Backend:
 
 ```text
-uvicorn app.main:app --host 0.0.0.0 --port $PORT
+https://nusphere-production-c2e3.up.railway.app
 ```
 
-Set these Railway environment variables:
+Backend health check:
 
 ```text
-FRONTEND_ORIGINS=https://your-vercel-domain.vercel.app
+https://nusphere-production-c2e3.up.railway.app/health
+```
+
+## Railway Backend
+
+Railway deploys the backend from the repository root using the root `Dockerfile`. The Dockerfile installs the Python backend dependencies and starts FastAPI.
+
+The app starts with:
+
+```text
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+When generating the Railway public domain, use the port Railway exposes for the running container. In our current deployment, the working public networking port is:
+
+```text
+8080
+```
+
+Set this Railway environment variable:
+
+```text
+FRONTEND_ORIGINS=https://nusphere-sigma.vercel.app
+```
+
+This allows the deployed frontend to call the backend from the browser.
+
+Optional variables reserved for future production integrations:
+
+```text
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 OPENAI_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
-Current deployed frontend:
+For the Milestone 1 proof of concept, these can stay blank.
+
+## Vercel Frontend
+
+Vercel should deploy the `frontend` folder.
+
+Project settings:
 
 ```text
-https://nusphere-sigma.vercel.app
-```
-
-Current deployed backend:
-
-```text
-https://nusphere-production-c2e3.up.railway.app
-```
-
-For the current technical proof of concept, Supabase/OpenAI/OpenRouter can stay blank. Auth and profile data are held in memory on the backend, so they reset when the Railway service restarts.
-
-## 2. Vercel Frontend
-
-Create a Vercel project from this repository and set the project root directory to:
-
-```text
-frontend
+Root Directory: frontend
+Framework Preset: Next.js
 ```
 
 Set this Vercel environment variable:
 
 ```text
-NEXT_PUBLIC_API_URL=https://your-railway-backend-domain.up.railway.app
+NEXT_PUBLIC_API_URL=https://nusphere-production-c2e3.up.railway.app
 ```
 
-Then redeploy the frontend after the Railway URL is known.
+After changing this variable, redeploy the Vercel project so the frontend uses the deployed backend instead of localhost.
 
-## 3. Supabase Production Upgrade
+## Deployment Order
 
-For persistent production auth/profile data, create a Supabase project and wire the backend to Supabase Auth/PostgreSQL. The current POC keeps the backend interface ready for this by using auth/profile API endpoints rather than storing profile data only in the browser.
+1. Deploy the backend on Railway.
+2. Generate a Railway public domain.
+3. Confirm the backend works by visiting `/health`.
+4. Deploy the frontend on Vercel.
+5. Add the Vercel URL to `FRONTEND_ORIGINS` in Railway.
+6. Redeploy the Railway backend.
+7. Test login, signup, profile, recommendations, and logout on the Vercel site.
 
-Recommended production tables:
+## Supabase Upgrade Path
+
+The current proof of concept keeps auth/profile data in backend memory. This is acceptable for Milestone 1 because the aim is to prove frontend-backend integration, but it is not enough for a real production deployment.
+
+For the next version, Supabase should store user profiles persistently. A possible `profiles` table is:
 
 ```sql
 create table profiles (
@@ -79,12 +111,18 @@ create table profiles (
 );
 ```
 
-## Deployment Order
+Once Supabase Auth is connected, the backend should validate Supabase JWTs instead of using the current demo session tokens.
 
-1. Deploy backend to Railway.
-2. Copy the Railway public URL.
-3. Add that URL as `NEXT_PUBLIC_API_URL` in Vercel.
-4. Deploy frontend to Vercel.
-5. Copy the Vercel public URL.
-6. Add that URL as `FRONTEND_ORIGINS` in Railway.
-7. Redeploy backend on Railway.
+## Troubleshooting
+
+If Railway shows "Application failed to respond", check these first:
+
+- The public networking port should match the running container port.
+- The deployment logs should show that Uvicorn started successfully.
+- The `/health` endpoint should return `{"status":"ok"}`.
+
+If the Vercel site loads but login fails:
+
+- Check that `NEXT_PUBLIC_API_URL` points to the Railway backend.
+- Check that `FRONTEND_ORIGINS` in Railway contains the exact Vercel URL, without a trailing slash.
+- Redeploy both services after changing environment variables.
