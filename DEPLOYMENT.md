@@ -30,6 +30,18 @@ OPENAI_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
+Current deployed frontend:
+
+```text
+https://nusphere-sigma.vercel.app
+```
+
+Current deployed backend:
+
+```text
+https://nusphere-production-c2e3.up.railway.app
+```
+
 For the current technical proof of concept, Supabase/OpenAI/OpenRouter can stay blank. Auth and profile data are held in memory on the backend, so they reset when the Railway service restarts.
 
 ## 2. Vercel Frontend
