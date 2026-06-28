@@ -2,7 +2,7 @@
 
 NUSphere is a mentorship matching web application for NUS students. The idea is to help students find seniors, professors, and experienced peers who are relevant to their academic goals, interests, CCAs, research plans, exchange/NOC plans, and other pathways through university.
 
-This repository contains our Milestone 1 technical proof of concept. The goal of this version is not to build every planned feature, but to prove that the core full-stack flow works: users can sign up or log in, the frontend talks to the backend, profile information is stored by the backend during the session, and mentor recommendations are returned based on user interests and goals.
+This repository contains the NUSphere MVP work. The app now keeps the core full-stack flow working with persistent backend storage: users can sign up or log in, the frontend talks to the backend, profile information is saved in a database, and mentor recommendations are returned based on user interests and goals.
 
 ## Live Demo
 
@@ -49,6 +49,9 @@ Backend:
 - Python
 - FastAPI
 - Pydantic
+- SQLAlchemy
+- PostgreSQL-compatible database through `DATABASE_URL`
+- SQLite fallback for local development
 
 Deployment:
 
@@ -57,7 +60,8 @@ Deployment:
 
 Planned production services:
 
-- Supabase PostgreSQL and Supabase Auth
+- Supabase PostgreSQL or Railway PostgreSQL for persistent storage
+- Supabase Auth
 - Supabase Realtime for future messaging
 - OpenAI embeddings for richer mentor recommendations
 - OpenRouter for the future AI assistant
@@ -120,24 +124,39 @@ Backend:
 
 ```text
 FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+DATABASE_URL=sqlite:///./nusphere.db
 ```
 
-For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway backend URL, and `FRONTEND_ORIGINS` should include the Vercel frontend URL.
+For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway backend URL, `FRONTEND_ORIGINS` should include the Vercel frontend URL, and `DATABASE_URL` should point to the managed PostgreSQL database connection string.
+
+## Database Storage
+
+The backend stores application data through SQLAlchemy tables instead of in-memory dictionaries.
+
+- `users`: signup data, student and mentor profiles, profile pictures, interests, goals, mentor type fields, and profile edits
+- `sessions`: active login tokens
+- `questions`: Q&A posts, knowledge archive tags, attachment names, and generated key terms
+- `answers`: mentor responses and archive summaries
+- `conversations`: student-mentor chat threads
+- `messages`: individual chat messages
+
+Local development uses `sqlite:///./nusphere.db` if `DATABASE_URL` is not set. Deployment should use a PostgreSQL URL from Supabase or Railway.
 
 ## Current Limitations
 
-This is a technical proof of concept, so some parts are intentionally lightweight:
+This is still an MVP-stage system, so some parts are intentionally lightweight:
 
-- User accounts and sessions are stored in backend memory, so they reset when the backend restarts.
-- Supabase Auth/PostgreSQL is not connected yet.
+- Database tables are created automatically on backend startup rather than through a full migration tool.
+- Supabase Auth is not connected yet.
 - Mentor recommendation logic is currently rule-based rather than embedding-based.
-- Q&A, messaging, ratings, knowledge archive, and AI assistant are represented in the product direction but not fully implemented in this milestone.
+- Ratings and the AI assistant are still future features.
 
 ## Next Steps
 
 For Milestone 2, the main improvements should be:
 
-- Replace in-memory auth/profile storage with Supabase Auth and PostgreSQL
+- Move database schema changes into Alembic migrations
+- Connect Supabase Auth
 - Expand mentor profiles and recommendation data
 - Add the Q&A platform
 - Start the communication system

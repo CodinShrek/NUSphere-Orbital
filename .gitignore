@@ -3,16 +3,23 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.pyc
+*.db
+*.sqlite
+*.sqlite3
 
 # Next.js
 node_modules/
 .next/
 out/
 *.tsbuildinfo
+*.log
 
 # Local env
 .env
 .env.local
+
+# Generated local deliverables
+outputs/
 
 # OS/editor
 .DS_Store
