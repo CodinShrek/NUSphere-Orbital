@@ -95,6 +95,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -138,15 +139,24 @@ The backend stores application data through SQLAlchemy tables instead of in-memo
 - `questions`: Q&A posts, knowledge archive tags, attachment names, and generated key terms
 - `answers`: mentor responses and archive summaries
 - `conversations`: student-mentor chat threads
+- `connections`: pending and accepted mentor-student connection requests
 - `messages`: individual chat messages
+- `profile_embeddings`: cached semantic profile vectors and embedding model metadata
 
-Local development uses `sqlite:///./nusphere.db` if `DATABASE_URL` is not set. Deployment should use a PostgreSQL URL from Supabase or Railway.
+Local development uses `sqlite:///./nusphere.db` if `DATABASE_URL` is not set. Deployment should use a PostgreSQL URL from Supabase or Railway. Alembic owns the database schema; run `alembic upgrade head` from `backend/` after pulling schema changes and before starting the API.
+
+After changing `backend/app/models.py`, create and review a migration:
+
+```powershell
+cd backend
+alembic revision --autogenerate -m "describe the schema change"
+alembic upgrade head
+```
 
 ## Current Limitations
 
 This is still an MVP-stage system, so some parts are intentionally lightweight:
 
-- Database tables are created automatically on backend startup rather than through a full migration tool.
 - Supabase Auth is not connected yet.
 - Mentor recommendation logic is currently rule-based rather than embedding-based.
 - Ratings and the AI assistant are still future features.
@@ -155,7 +165,6 @@ This is still an MVP-stage system, so some parts are intentionally lightweight:
 
 For Milestone 2, the main improvements should be:
 
-- Move database schema changes into Alembic migrations
 - Connect Supabase Auth
 - Expand mentor profiles and recommendation data
 - Add the Q&A platform

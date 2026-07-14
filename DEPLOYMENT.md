@@ -32,10 +32,10 @@ https://nusphere-production-c2e3.up.railway.app/health
 
 Railway deploys the backend from the repository root using the root `Dockerfile`. The Dockerfile installs the Python backend dependencies and starts FastAPI.
 
-The app starts with:
+The container applies pending Alembic migrations before starting the API:
 
 ```text
-uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
 When generating the Railway public domain, use the port Railway exposes for the running container. In our current deployment, the working public networking port is:
@@ -89,7 +89,7 @@ After changing this variable, redeploy the Vercel project so the frontend uses t
 2. Add a PostgreSQL database through Supabase or Railway.
 3. Set `DATABASE_URL` in Railway.
 4. Generate a Railway public domain.
-5. Confirm the backend works by visiting `/health`.
+5. Confirm the deployment logs show `alembic upgrade head` completed, then verify `/health`.
 6. Deploy the frontend on Vercel.
 7. Add the Vercel URL to `FRONTEND_ORIGINS` in Railway.
 8. Redeploy the Railway backend.
@@ -97,16 +97,18 @@ After changing this variable, redeploy the Vercel project so the frontend uses t
 
 ## Database Schema
 
-The backend creates these SQLAlchemy tables on startup:
+The baseline Alembic migration creates these SQLAlchemy tables:
 
 - `users`: signup fields, student/mentor profile fields, profile pictures, interests, goals, and mentor metadata
 - `sessions`: active login sessions
 - `questions`: Q&A/knowledge archive posts, tags, attachments, and generated key terms
 - `answers`: mentor responses and archive summaries
 - `conversations`: student-mentor chat threads
+- `connections`: pending and accepted mentor-student connection requests
 - `messages`: individual messages
+- `profile_embeddings`: cached semantic profile vectors and embedding model metadata
 
-The current MVP creates tables automatically. A later production hardening step should move schema changes into Alembic migrations and connect Supabase Auth so the backend validates Supabase JWTs instead of demo session tokens.
+Alembic records the applied schema revision in `alembic_version`. New databases use `alembic upgrade head`. An existing Milestone 2 database whose tables already match the baseline should be backed up, inspected, and marked with `alembic stamp head` once rather than running the table-creation migration over existing tables.
 
 ## Troubleshooting
 

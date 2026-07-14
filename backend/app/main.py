@@ -14,7 +14,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from .database import Base, engine, get_db
+from .database import get_db
 from .ai_matching import cosine_similarity, embed_text, goal_search_text, match_explanation, profile_completeness, structured_overlap, user_profile_text
 from .models import AnswerRecord, ConnectionRecord, ConversationRecord, MessageRecord, ProfileEmbeddingRecord, QuestionRecord, SessionRecord, UserRecord
 
@@ -260,9 +260,6 @@ app.add_middleware(
 
 
 static_mentors: list[Mentor] = []
-
-
-Base.metadata.create_all(bind=engine)
 
 
 def hash_password(password: str) -> str:
