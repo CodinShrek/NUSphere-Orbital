@@ -1,12 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Bell, Bot, LogOut, Search, Star, UserRound, Zap } from "lucide-react";
+import { Bot, Search, Star, Zap } from "lucide-react";
+
+import { AuthScreen } from "@/components/auth/AuthScreen";
+import { AppShell } from "@/components/layout/AppShell";
+import { OptionDatalist, TextAreaInput, TextInput } from "@/components/ui/FormControls";
+import {
+  accommodationOptions,
+  ccas,
+  departmentsByFaculty,
+  exchangeUniversities,
+  facultyMajors,
+  mentorTypes,
+  opportunities,
+  pastel,
+} from "@/data/profile-options";
 import {
   acceptConnection,
   answerQuestion,
-  Connection,
-  Conversation,
   createQuestion,
   fetchAiGoalMatches,
   fetchAiProfileMatches,
@@ -15,326 +27,19 @@ import {
   fetchCurrentUser,
   fetchQuestions,
   fetchRecommendations,
-  login,
   logout,
-  Mentor,
-  Question,
-  register,
   requestConnection,
-  Role,
   sendConversationMessage,
   startConversation,
   updateProfile,
-  User,
-  MentorType,
 } from "@/lib/api";
-
-const pastel = ["bg-[#e7ecff] text-[#5f16ee]", "bg-[#ffe3aa] text-[#ba3b12]", "bg-[#ecfdf3] text-[#087443]", "bg-[#f1f4f9] text-[#596173]", "bg-[#f5ecff] text-[#5f16ee]"];
-
-const facultyMajors: Record<string, string[]> = {
-  Business: ["Business Administration"],
-  Computing: ["Business Analytics", "Computer Engineering", "Computer Science", "Information Security", "Business Artificial Intelligence Systems"],
-  Dentistry: ["Dentistry"],
-  "Design and Engineering": [
-    "Architecture",
-    "Biomedical Engineering",
-    "Chemical Engineering",
-    "Civil Engineering",
-    "Computer Engineering",
-    "Electrical Engineering",
-    "Engineering Science",
-    "Environmental and Sustainability Engineering",
-    "Industrial Design",
-    "Industrial and Systems Engineering",
-    "Infrastructure and Project Management",
-    "Landscape Architecture",
-    "Materials Science and Engineering",
-    "Mechanical Engineering",
-    "Robotics and Machine Intelligence",
-  ],
-  "Humanities and Sciences": [
-    "Anthropology",
-    "Chemistry",
-    "Communications and New Media",
-    "Data Science and Analytics",
-    "Data Science and Economics",
-    "Economics",
-    "English Language and Linguistics",
-    "English Literature",
-    "Environmental Studies",
-    "Food Science and Technology",
-    "Geography",
-    "Global Studies",
-    "History",
-    "Japanese Studies",
-    "Life Sciences",
-    "Malay Studies",
-    "Mathematics",
-    "Pharmaceutical Science",
-    "Philosophy",
-    "Philosophy, Politics and Economics",
-    "Physics",
-    "Political Science",
-    "Psychology",
-    "Quantitative Finance",
-    "Social Work",
-    "Sociology",
-    "South Asian Studies",
-    "Southeast Asian Studies",
-    "Statistics",
-    "Theatre and Performance Studies",
-  ],
-  Law: ["Law"],
-  Medicine: ["Medicine"],
-  Music: ["Music"],
-  Nursing: ["Nursing"],
-  Pharmacy: ["Pharmacy", "Pharmaceutical Science"],
-  "NUS College": ["NUS College"],
-};
-
-const ccas = [
-  "1.5degreeNUS",
-  "AIESEC in NUS",
-  "American Society of Mechanical Engineering Student Section",
-  "Arttero",
-  "Bachelor of Environmental Studies Student Committee",
-  "Bitscraps",
-  "BreakiNUS",
-  "Building and Estate Management Society",
-  "Business Analytics Consulting Team",
-  "Catholic Students' Society",
-  "CDE - Biomedical Engineering Club",
-  "CDE - Civil Engineering Club",
-  "CDE - ECE Undergraduate Student Council",
-  "Chemical Engineering Students' Society",
-  "Chemical Sciences Society",
-  "Computing for Voluntary Welfare Organisations",
-  "Electrical and Computer Engineering Club",
-  "Engineering Good Student Chapter",
-  "Engineers Without Borders (EWB) Singapore - NUS Student Chapter",
-  "Facilitators@NUS",
-  "NUS Students' Sports Club",
-  "TeamNUS",
-  "NUS Hackers",
-  "NUS Muslim Society",
-  "NUS Students' Business Club",
-  "NUS Students' Computing Club",
-  "NUS Students' Engineering Club",
-  "NUSSU",
-  "College of Alice and Peter Tan",
-  "Residential College 4",
-  "Ridge View Residential College",
-  "Tembusu College",
-  "Acacia College",
-  "Other",
-];
-
-const opportunities = [
-  "NUS Overseas Colleges",
-  "NUS Enterprise Summer Programme in Entrepreneurship",
-  "NUS Enterprise Winter Programme in Entrepreneurship",
-  "NUS Start-up Runway",
-  "NUS Minimum Viable Product (MVP) Studio",
-  "BLOCK71",
-  "PIER71",
-  "ICE71",
-  "InnovFest",
-  "Undergraduate Research Opportunities Programme (UROP)",
-  "Special Programme in Science (SPS)",
-  "Engineering Scholars Programme (E-Scholars)",
-  "Innovation and Design Programme (iDP)",
-  "NUS Engineering and Medicine Track",
-  "NUS College Global Pathways",
-  "Case competitions",
-  "Teaching assistantship",
-  "Other",
-];
-
-const exchangeUniversities = [
-  "Adelaide University",
-  "Australian National University",
-  "Monash University",
-  "University of Melbourne",
-  "University of New South Wales",
-  "University of Queensland",
-  "University of Sydney",
-  "University of Western Australia",
-  "Fudan University",
-  "Peking University",
-  "Shanghai Jiao Tong University",
-  "Tsinghua University",
-  "Zhejiang University",
-  "Chinese University of Hong Kong",
-  "City University of Hong Kong",
-  "Hong Kong Polytechnic University",
-  "University of Hong Kong",
-  "Keio University",
-  "Kyoto University",
-  "Kyushu University",
-  "Nagoya University",
-  "University of Osaka",
-  "University of Tokyo",
-  "Waseda University",
-  "Korea Advanced Institute of Science and Technology (KAIST)",
-  "Korea University",
-  "Seoul National University",
-  "Yonsei University",
-  "National Taiwan University",
-  "Chulalongkorn University",
-  "Mahidol University",
-  "University of Auckland",
-  "University of Canterbury",
-  "University of Otago",
-  "Victoria University of Wellington",
-  "Concordia University",
-  "McGill University",
-  "University of British Columbia",
-  "University of Toronto",
-  "University of Waterloo",
-  "Boston College",
-  "Boston University",
-  "Carnegie Mellon University",
-  "Cornell University",
-  "Georgia Institute of Technology",
-  "Princeton University",
-  "University of California (System-Wide)",
-  "University of Illinois at Urbana-Champaign",
-  "Other",
-];
-
-const accommodationOptions = [
-  "Acacia College",
-  "College of Alice and Peter Tan",
-  "Eusoff Hall",
-  "Helix House",
-  "Kent Ridge Hall",
-  "King Edward VII Hall",
-  "LightHouse",
-  "PGP Residence (PGPR)",
-  "Pioneer House",
-  "Raffles Hall",
-  "Residential College 4",
-  "Ridge View Residential College (RVRC)",
-  "Sheares Hall",
-  "Temasek Hall",
-  "Tembusu College",
-  "UTown Residence",
-  "Valour House",
-  "Off-campus accommodation",
-];
-
-const mentorTypes: { value: MentorType; label: string; description: string }[] = [
-  { value: "senior", label: "Senior", description: "Current NUS student mentoring juniors on modules, CCAs, exchange, and pathways." },
-  { value: "alumni", label: "Alumni", description: "NUS graduate sharing pathway, career, and transition advice." },
-  { value: "professor", label: "Professor", description: "Faculty member offering academic, module, research, or consultation guidance." },
-  { value: "nus_staff", label: "NUS Staff", description: "Staff mentor from an NUS office, unit, or support function." },
-  { value: "other", label: "Other", description: "Another type of NUS-affiliated mentor." },
-];
-
-const departmentsByFaculty: Record<string, string[]> = {
-  Business: ["Accounting", "Analytics and Operations", "Finance", "Management and Organisation", "Marketing", "Strategy and Policy"],
-  Computing: ["Department of Computer Science", "Department of Information Systems and Analytics"],
-  Dentistry: ["Faculty of Dentistry"],
-  "Design and Engineering": [
-    "Architecture",
-    "Biomedical Engineering",
-    "Built Environment",
-    "Chemical and Biomolecular Engineering",
-    "Civil and Environmental Engineering",
-    "Electrical and Computer Engineering",
-    "Industrial Design",
-    "Industrial Systems Engineering and Management",
-    "Materials Science and Engineering",
-    "Mechanical Engineering",
-  ],
-  "Humanities and Sciences": [
-    "Asian Studies",
-    "Centre for English Language Communication",
-    "Centre for Language Studies",
-    "Chemistry",
-    "Communications and New Media",
-    "Economics",
-    "English, Linguistics and Theatre Studies",
-    "Geography",
-    "History",
-    "Mathematics",
-    "Philosophy",
-    "Physics",
-    "Political Science",
-    "Psychology",
-    "Social Work",
-    "Sociology and Anthropology",
-    "Statistics and Data Science",
-  ],
-  Law: ["Faculty of Law"],
-  Medicine: [
-    "Alice Lee Centre for Nursing Studies",
-    "Anaesthesia",
-    "Anatomy",
-    "Biochemistry",
-    "Diagnostic Radiology",
-    "Medicine",
-    "Microbiology and Immunology",
-    "Obstetrics and Gynaecology",
-    "Ophthalmology",
-    "Orthopaedic Surgery",
-    "Otolaryngology",
-    "Paediatrics",
-    "Pathology",
-    "Pharmacology",
-    "Physiology",
-    "Psychological Medicine",
-    "Surgery",
-  ],
-  Music: ["Yong Siew Toh Conservatory of Music"],
-  Nursing: ["Alice Lee Centre for Nursing Studies"],
-  Pharmacy: ["Department of Pharmacy and Pharmaceutical Sciences"],
-  "NUS College": ["NUS College"],
-};
-
-const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const consultationHourRows = Array.from({ length: 12 }, (_, index) => `${String(index + 8).padStart(2, "0")}:00`);
-const passwordRequirementLabels = {
-  length: "At least 8 characters",
-  upper: "One uppercase letter",
-  lower: "One lowercase letter",
-  number: "One number",
-  match: "Password and confirmation match",
-};
+import { splitList } from "@/lib/profile-utils";
+import type { AuthResponse, Connection, Conversation, Mentor, MentorType, Question, User } from "@/types/api";
+import type { View } from "@/types/navigation";
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState("");
-  const [activeRole, setActiveRole] = useState<Role>("student");
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [name, setName] = useState("");
-  const [faculty, setFaculty] = useState("Computing");
-  const [major, setMajor] = useState("Computer Science");
-  const [modulesTaken, setModulesTaken] = useState("");
-  const [ccaText, setCcaText] = useState("");
-  const [opportunityText, setOpportunityText] = useState("");
-  const [exchangeText, setExchangeText] = useState("");
-  const [accommodation, setAccommodation] = useState("Off-campus accommodation");
-  const [interests, setInterests] = useState("");
-  const [goals, setGoals] = useState("");
-  const [bio, setBio] = useState("");
-  const [mentorType, setMentorType] = useState<MentorType>("senior");
-  const [mentorshipGoals, setMentorshipGoals] = useState("");
-  const [mentorTypeOther, setMentorTypeOther] = useState("");
-  const [graduationYear, setGraduationYear] = useState("");
-  const [currentRole, setCurrentRole] = useState("");
-  const [organisation, setOrganisation] = useState("");
-  const [department, setDepartment] = useState("");
-  const [selectedConsultationSlots, setSelectedConsultationSlots] = useState<string[]>([]);
-  const [modulesTaught, setModulesTaught] = useState("");
-  const [areasOfExpertise, setAreasOfExpertise] = useState("");
-  const [officeLocation, setOfficeLocation] = useState("");
-  const [office, setOffice] = useState("");
   const [mentors, setMentors] = useState<Mentor[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -343,18 +48,7 @@ export default function Home() {
   const [activeView, setActiveView] = useState<View>("home");
   const [selectedMentorId, setSelectedMentorId] = useState("");
   const [error, setError] = useState("");
-  const majorOptions = facultyMajors[faculty] ?? [];
-  const departmentOptions = departmentsByFaculty[faculty] ?? [];
   const selectedMentor = mentors.find((mentor) => mentor.id === selectedMentorId) ?? mentors[0];
-  const passwordsMatch = !confirmPassword || password === confirmPassword;
-  const passwordRequirements = {
-    length: password.length >= 8,
-    upper: /[A-Z]/.test(password),
-    lower: /[a-z]/.test(password),
-    number: /\d/.test(password),
-    match: Boolean(confirmPassword) && password === confirmPassword,
-  };
-  const passwordReady = Object.values(passwordRequirements).every(Boolean);
 
   useEffect(() => {
     const savedToken = window.localStorage.getItem("nusphere_token");
@@ -395,51 +89,11 @@ export default function Home() {
       .catch((err: Error) => setError(err.message));
   }, [token]);
 
-  async function submitAuth() {
-    setError("");
-    if (mode === "register" && !passwordReady) {
-      setError("Please fix the password requirements before creating your account.");
-      return;
-    }
-    try {
-      const response =
-        mode === "login"
-          ? await login(email, password, activeRole)
-          : await register({
-              email,
-              password,
-              role: activeRole,
-              name,
-              faculty,
-              major,
-              modules_taken: splitList(modulesTaken),
-              ccas: splitList(ccaText),
-              nus_opportunities: splitList(opportunityText),
-              exchange_universities: splitList(exchangeText),
-              accommodation,
-              interests: splitList(interests),
-              goals: splitList(goals),
-              bio,
-              mentor_type: activeRole === "mentor" ? mentorType : undefined,
-              mentorship_goals: activeRole === "mentor" ? mentorshipGoals : undefined,
-              mentor_type_other: activeRole === "mentor" && mentorType === "other" ? mentorTypeOther : undefined,
-              graduation_year: activeRole === "mentor" && mentorType === "alumni" ? graduationYear : undefined,
-              current_role: activeRole === "mentor" && ["alumni", "other"].includes(mentorType) ? currentRole : undefined,
-              organisation: activeRole === "mentor" && ["alumni", "other"].includes(mentorType) ? organisation : undefined,
-              department: activeRole === "mentor" && ["professor", "nus_staff"].includes(mentorType) ? department || departmentOptions[0] : undefined,
-              consultation_hours: activeRole === "mentor" ? formatConsultationSlots(selectedConsultationSlots) : undefined,
-              modules_taught: activeRole === "mentor" && mentorType === "professor" ? splitList(modulesTaught) : [],
-              areas_of_expertise: activeRole === "mentor" && ["professor", "nus_staff", "other"].includes(mentorType) ? splitList(areasOfExpertise) : [],
-              office_location: activeRole === "mentor" && mentorType === "professor" ? officeLocation : undefined,
-              office: activeRole === "mentor" && mentorType === "nus_staff" ? office : undefined,
-            });
-      setToken(response.token);
-      setUser(response.user);
-      setActiveView("home");
-      window.localStorage.setItem("nusphere_token", response.token);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to authenticate");
-    }
+  function handleAuthenticated(response: AuthResponse) {
+    setToken(response.token);
+    setUser(response.user);
+    setActiveView("home");
+    window.localStorage.setItem("nusphere_token", response.token);
   }
 
   async function handleLogout() {
@@ -529,285 +183,19 @@ export default function Home() {
   }
 
   if (!user) {
-    return (
-      <main className="min-h-screen bg-[radial-gradient(circle_at_bottom,#fff7e9,transparent_35%),linear-gradient(120deg,#f2f5ff,#ffffff)] px-5 py-8">
-        <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[760px] items-start justify-center py-5">
-          <div className="card w-full max-w-[640px] px-8 py-10 shadow-soft sm:px-11">
-            <Logo centered />
-            <p className="mt-3 text-center text-[15px] font-medium text-[#6f7487]">Your NUS mentorship community</p>
-
-            <div className="mt-9 grid h-12 grid-cols-2 rounded-xl border border-[#c8cfde] p-0.5">
-              {(["student", "mentor"] as Role[]).map((role) => (
-                <button
-                  key={role}
-                  className={`rounded-[10px] font-bold capitalize transition ${activeRole === role ? "bg-nusPurple text-white" : "text-[#687086]"}`}
-                  onClick={() => {
-                    setActiveRole(role);
-                    setEmail("");
-                    setPassword("");
-                    setConfirmPassword("");
-                    setShowPassword(false);
-                    setShowConfirmPassword(false);
-                    setName("");
-                    setFaculty("Computing");
-                    setMajor(role === "student" ? "Computer Science" : "Business Analytics");
-                    setModulesTaken("");
-                    setCcaText("");
-                    setOpportunityText("");
-                    setExchangeText("");
-                    setAccommodation("Off-campus accommodation");
-                    setInterests("");
-                    setGoals("");
-                    setBio("");
-                    setMentorshipGoals("");
-                    setMentorType("senior");
-                    setMentorTypeOther("");
-                    setGraduationYear("");
-                    setCurrentRole("");
-                    setOrganisation("");
-                    setDepartment("");
-                    setSelectedConsultationSlots([]);
-                    setModulesTaught("");
-                    setAreasOfExpertise("");
-                    setOfficeLocation("");
-                    setOffice("");
-                  }}
-                >
-                  {role}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-8 space-y-5">
-              {mode === "register" && (
-                <label className="block text-sm font-bold text-[#3f4659]">
-                  Full name
-                  <input className="field mt-2" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" />
-                </label>
-              )}
-              <label className="block text-sm font-bold text-[#3f4659]">
-                NUS Email
-                <input className="field mt-2" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={activeRole === "mentor" ? "mentor@u.nus.edu" : "student@u.nus.edu"} />
-              </label>
-              <label className="block text-sm font-bold text-[#3f4659]">
-                Password
-                <div className="mt-2 flex rounded-xl border border-[#c8cfde] bg-white focus-within:border-[#6d28f2] focus-within:shadow-[0_0_0_3px_rgba(109,40,242,0.12)]">
-                  <input className="min-w-0 flex-1 rounded-xl px-4 py-3.5 outline-none" value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} placeholder="Password" />
-                  <button type="button" className="px-4 font-bold text-nusPurple" onClick={() => setShowPassword((current) => !current)}>{showPassword ? "Hide" : "Show"}</button>
-                </div>
-              </label>
-              {mode === "register" && (
-                <label className="block text-sm font-bold text-[#3f4659]">
-                  Confirm password
-                  <div className="mt-2 flex rounded-xl border border-[#c8cfde] bg-white focus-within:border-[#6d28f2] focus-within:shadow-[0_0_0_3px_rgba(109,40,242,0.12)]">
-                    <input className="min-w-0 flex-1 rounded-xl px-4 py-3.5 outline-none" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} type={showConfirmPassword ? "text" : "password"} placeholder="Confirm password" />
-                    <button type="button" className="px-4 font-bold text-nusPurple" onClick={() => setShowConfirmPassword((current) => !current)}>{showConfirmPassword ? "Hide" : "Show"}</button>
-                  </div>
-                  {confirmPassword && <p className={`mt-2 text-sm font-bold ${passwordsMatch ? "text-[#087443]" : "text-[#c02b18]"}`}>{passwordsMatch ? "Passwords match" : "Passwords do not match"}</p>}
-                </label>
-              )}
-              {mode === "register" && <PasswordChecklist requirements={passwordRequirements} />}
-              {mode === "register" && (
-                <>
-                  {activeRole === "mentor" && (
-                    <div className="rounded-2xl border border-[#d4dae8] bg-[#f8faff] p-4">
-                      <p className="font-black text-[#3f4659]">What type of mentor are you?</p>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        {mentorTypes.map((type) => (
-                          <button
-                            key={type.value}
-                            type="button"
-                            className={`rounded-xl border p-3 text-left transition ${mentorType === type.value ? "border-nusPurple bg-[#f3f0ff] text-nusPurple" : "border-[#d4dae8] bg-white text-[#596173]"}`}
-                            onClick={() => setMentorType(type.value)}
-                          >
-                            <span className="block font-black">{type.label}</span>
-                            <span className="mt-1 block text-xs font-medium">{type.description}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <label className="block text-sm font-bold text-[#3f4659]">
-                    Faculty
-                    <select
-                      className="field mt-2"
-                      value={faculty}
-                      onChange={(event) => {
-                        const selectedFaculty = event.target.value;
-                        setFaculty(selectedFaculty);
-                        setMajor(facultyMajors[selectedFaculty]?.[0] ?? "");
-                        setDepartment(departmentsByFaculty[selectedFaculty]?.[0] ?? "");
-                      }}
-                    >
-                      {Object.keys(facultyMajors).map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block text-sm font-bold text-[#3f4659]">
-                    {activeRole === "mentor" && mentorType === "professor" ? "Related programme" : activeRole === "mentor" && mentorType === "alumni" ? "NUS programme graduated from" : "Major / Programme"}
-                    <select className="field mt-2" value={major} onChange={(event) => setMajor(event.target.value)}>
-                      {majorOptions.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {(activeRole === "student" || (activeRole === "mentor" && mentorType === "senior")) && (
-                    <>
-                      <TextInput label="Modules taken" value={modulesTaken} onChange={setModulesTaken} placeholder="CS1010, MA1521, GET1029" />
-                      <TextInput label="CCAs, clubs, or organisations" value={ccaText} onChange={setCcaText} list="cca-options" placeholder="Start typing a NUS club, or type your own" />
-                      <TextInput label="Other NUS opportunities" value={opportunityText} onChange={setOpportunityText} list="opportunity-options" placeholder="NOC, UROP, startup programmes..." />
-                      <TextInput label="Exchange universities" value={exchangeText} onChange={setExchangeText} list="exchange-options" placeholder="Start typing partner universities, or type Other" />
-                      <label className="block text-sm font-bold text-[#3f4659]">
-                        Accommodation
-                        <select className="field mt-2" value={accommodation} onChange={(event) => setAccommodation(event.target.value)}>
-                          {accommodationOptions.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </>
-                  )}
-                  {activeRole === "mentor" && mentorType === "alumni" && (
-                    <>
-                      <TextInput label="Graduation year" value={graduationYear} onChange={setGraduationYear} placeholder="2024" />
-                      <TextInput label="Current role" value={currentRole} onChange={setCurrentRole} placeholder="Software engineer, analyst, founder..." />
-                      <TextInput label="Current organisation" value={organisation} onChange={setOrganisation} placeholder="Company, university, startup, or organisation" />
-                      <TextInput label="NUS experiences you can advise on" value={opportunityText} onChange={setOpportunityText} list="opportunity-options" placeholder="NOC, UROP, exchange, internships..." />
-                    </>
-                  )}
-                  {activeRole === "mentor" && mentorType === "professor" && (
-                    <>
-                      <label className="block text-sm font-bold text-[#3f4659]">
-                        Department
-                        <select className="field mt-2" value={department || departmentOptions[0] || ""} onChange={(event) => setDepartment(event.target.value)}>
-                          {(departmentOptions.length ? departmentOptions : ["Other"]).map((option) => (
-                            <option key={option} value={option}>{option}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <TextInput label="Modules taught" value={modulesTaught} onChange={setModulesTaught} placeholder="CS1010, CS2040S, CS4248" />
-                      <TextInput label="Area of expertise" value={areasOfExpertise} onChange={setAreasOfExpertise} placeholder="AI, systems, HCI, databases..." />
-                      <TextInput label="Office / cubicle number" value={officeLocation} onChange={setOfficeLocation} placeholder="COM3-02-15" />
-                    </>
-                  )}
-                  {activeRole === "mentor" && mentorType === "nus_staff" && (
-                    <>
-                      <TextInput label="NUS office / unit" value={office} onChange={setOffice} placeholder="CFG, NUS Enterprise, GRO, OSA..." />
-                      <TextInput label="Department or team" value={department} onChange={setDepartment} placeholder="Career advisory, exchange, entrepreneurship..." />
-                      <TextInput label="Area of expertise / focus" value={areasOfExpertise} onChange={setAreasOfExpertise} placeholder="Career planning, startups, exchange, wellbeing..." />
-                      <TextInput label="Office / cubicle number" value={officeLocation} onChange={setOfficeLocation} placeholder="Optional" />
-                    </>
-                  )}
-                  {activeRole === "mentor" && mentorType === "other" && (
-                    <>
-                      <TextInput label="Specify mentor type" value={mentorTypeOther} onChange={setMentorTypeOther} placeholder="Industry mentor, startup founder, research mentor..." />
-                      <TextInput label="Current role" value={currentRole} onChange={setCurrentRole} placeholder="Your current role or affiliation" />
-                      <TextInput label="Organisation / affiliation" value={organisation} onChange={setOrganisation} placeholder="Organisation or NUS affiliation" />
-                      <TextInput label="Area of expertise / focus" value={areasOfExpertise} onChange={setAreasOfExpertise} placeholder="Topics you can advise on" />
-                    </>
-                  )}
-                  {activeRole === "mentor" && (
-                    <ConsultationCalendar selectedSlots={selectedConsultationSlots} onToggle={(slot) => setSelectedConsultationSlots((current) => toggleSlot(current, slot))} />
-                  )}
-                  <label className="block text-sm font-bold text-[#3f4659]">
-                    {activeRole === "mentor" ? "Topics you can mentor on" : "Areas of interest"}
-                    <input className="field mt-2" value={interests} onChange={(event) => setInterests(event.target.value)} placeholder={activeRole === "mentor" ? "Module planning, research, NOC, internships" : "AI/M4, Interest 2, UROPS"} />
-                  </label>
-                  <label className="block text-sm font-bold text-[#3f4659]">
-                    {activeRole === "mentor" ? "Students you hope to support" : "Goals"}
-                    <input className="field mt-2" value={goals} onChange={(event) => setGoals(event.target.value)} placeholder={activeRole === "mentor" ? "Students exploring computing, research, exchange..." : "Explore modules, Find research guidance"} />
-                  </label>
-                  <label className="block text-sm font-bold text-[#3f4659]">
-                    {activeRole === "mentor" ? "Short public mentor profile" : "About you and what you want to achieve at NUS"}
-                    <textarea className="field mt-2 min-h-28 resize-y py-3" value={bio} onChange={(event) => setBio(event.target.value)} placeholder={activeRole === "mentor" ? "Briefly describe your background and what students can approach you for." : "Tell mentors what you are exploring and what support would help."} />
-                  </label>
-                  {activeRole === "mentor" && (
-                    <label className="block text-sm font-bold text-[#3f4659]">
-                      What do you want to achieve with mentorship?
-                      <textarea className="field mt-2 min-h-24 resize-y py-3" value={mentorshipGoals} onChange={(event) => setMentorshipGoals(event.target.value)} placeholder="Describe the kind of guidance you want to offer." />
-                    </label>
-                  )}
-                </>
-              )}
-            </div>
-
-            {mode === "register" && (
-              <>
-                <OptionDatalist id="cca-options" options={ccas} />
-                <OptionDatalist id="opportunity-options" options={opportunities} />
-                <OptionDatalist id="exchange-options" options={exchangeUniversities} />
-              </>
-            )}
-
-            <button className="mt-8 h-14 w-full rounded-xl bg-nusPurple font-bold text-white shadow-[0_8px_20px_rgba(95,22,238,0.25)]" onClick={submitAuth}>
-              {mode === "login" ? "Sign in" : "Create account"}
-            </button>
-
-            <div className="my-8 flex items-center gap-4 text-sm font-semibold text-[#9aa1b3]">
-              <span className="h-px flex-1 bg-[#d2d7e4]" />
-              or
-              <span className="h-px flex-1 bg-[#d2d7e4]" />
-            </div>
-
-            <button className="flex h-14 w-full items-center justify-center gap-3 rounded-xl border border-[#c8cfde] font-bold text-[#3f4659]">
-              <span className="grid grid-cols-2 gap-1">
-                <i className="h-3 w-3 rounded-sm bg-nusPurple" />
-                <i className="h-3 w-3 rounded-sm bg-[#ff6508]" />
-                <i className="h-3 w-3 rounded-sm bg-[#7166f9]" />
-                <i className="h-3 w-3 rounded-sm bg-[#ff8a00]" />
-              </span>
-              Continue with NUS SSO
-            </button>
-
-            <p className="mt-6 text-center text-sm font-medium text-[#7b8295]">
-              {mode === "login" ? "No account?" : "Already registered?"}{" "}
-              <button className="font-bold text-nusPurple" onClick={() => setMode(mode === "login" ? "register" : "login")}>
-                {mode === "login" ? "Sign up" : "Sign in"}
-              </button>
-            </p>
-            {error && <p className="mt-4 rounded-lg bg-[#fff1f0] px-4 py-3 text-sm font-semibold text-[#c02b18]">{error}</p>}
-
-            <div className="mt-9 border-t border-[#edf0f6] pt-6 text-center">
-              <p className="text-sm font-medium text-[#9aa1b3]">Trusted by NUS students across</p>
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
-                {["SoC", "Business", "Medicine", "Law", "Engineering"].map((item, index) => (
-                  <span className={`chip ${pastel[index]}`} key={item}>
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-      </main>
-    );
+    return <AuthScreen error={error} onError={setError} onAuthenticated={handleAuthenticated} />;
   }
 
   return (
-    <main className="min-h-screen bg-mist">
-      <Nav activeView={activeView} setActiveView={setActiveView} user={user} onLogout={handleLogout} />
+    <AppShell activeView={activeView} setActiveView={setActiveView} user={user} onLogout={handleLogout}>
       {activeView === "home" && <Dashboard user={user} questions={questions} connections={connections} conversations={conversations} setActiveView={setActiveView} onAcceptConnection={handleAcceptConnection} />}
       {activeView === "find" && <FindMentors mentors={mentors} connections={connections} token={token} user={user} onOpenMentorProfile={handleOpenMentorProfile} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
       {activeView === "qa" && <QAPlatform user={user} questions={questions} onCreateQuestion={handleCreateQuestion} onAnswerQuestion={handleAnswerQuestion} />}
       {activeView === "messages" && <Messages user={user} connections={connections} conversations={conversations} activeConversationId={activeConversationId} setActiveConversationId={setActiveConversationId} onAcceptConnection={handleAcceptConnection} onSendMessage={handleSendMessage} setActiveView={setActiveView} />}
       {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} setActiveView={setActiveView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
       {activeView === "my-profile" && <UserProfile user={user} setActiveView={setActiveView} onSaveProfile={handleSaveProfile} />}
-    </main>
+    </AppShell>
   );
-}
-
-function splitList(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function frequentQuestionTerms(questions: Question[]) {
@@ -875,103 +263,6 @@ function PendingConnectionRequests({ user, connections, onAcceptConnection }: { 
   );
 }
 
-function toggleSlot(current: string[], slot: string) {
-  return current.includes(slot) ? current.filter((item) => item !== slot) : [...current, slot].sort();
-}
-
-function formatConsultationSlots(slots: string[]) {
-  return slots.length ? slots.join(", ") : "By appointment";
-}
-
-function TextInput({ label, value, onChange, placeholder, list }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; list?: string }) {
-  return (
-    <label className="block text-sm font-bold text-[#3f4659]">
-      {label}
-      <input className="field mt-2" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} list={list} />
-    </label>
-  );
-}
-
-function TextAreaInput({ label, value, onChange, placeholder, rows = 4 }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; rows?: number }) {
-  return (
-    <label className="block text-sm font-bold text-[#3f4659]">
-      {label}
-      <textarea className="field mt-2 resize-y py-3" rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
-    </label>
-  );
-}
-
-function ConsultationCalendar({ selectedSlots, onToggle }: { selectedSlots: string[]; onToggle: (slot: string) => void }) {
-  return (
-    <div className="rounded-2xl border border-[#d4dae8] bg-[#f8faff] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="font-black text-[#3f4659]">Consultation hours</p>
-          <p className="mt-1 text-sm font-medium text-[#737b8f]">Click the hourly slots when you are generally open for consultation.</p>
-        </div>
-        <span className="chip bg-white text-nusPurple">{selectedSlots.length} selected</span>
-      </div>
-      <div className="mt-4 overflow-x-auto">
-        <div className="min-w-[720px]">
-          <div className="grid grid-cols-[72px_repeat(7,1fr)] gap-1">
-            <div />
-            {weekDays.map((day) => <div key={day} className="rounded-lg bg-[#ede8ff] py-2 text-center text-sm font-black text-nusPurple">{day}</div>)}
-            {consultationHourRows.map((hour) => (
-              <div className="contents" key={hour}>
-                <div className="py-2 text-sm font-bold text-[#737b8f]">{hour}</div>
-                {weekDays.map((day) => {
-                  const slot = `${day} ${hour}`;
-                  const active = selectedSlots.includes(slot);
-                  return (
-                    <button
-                      key={slot}
-                      type="button"
-                      aria-label={slot}
-                      className={`h-9 rounded-lg border text-xs font-bold transition ${active ? "border-nusPurple bg-nusPurple text-white" : "border-[#d4dae8] bg-white text-[#9aa1b3] hover:border-nusPurple hover:text-nusPurple"}`}
-                      onClick={() => onToggle(slot)}
-                    >
-                      {active ? "Open" : ""}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PasswordChecklist({ requirements }: { requirements: Record<keyof typeof passwordRequirementLabels, boolean> }) {
-  return (
-    <div className="rounded-2xl border border-[#d4dae8] bg-[#f8faff] p-4">
-      <p className="text-sm font-black uppercase text-[#9aa1b3]">Password requirements</p>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {(Object.keys(passwordRequirementLabels) as Array<keyof typeof passwordRequirementLabels>).map((key) => {
-          const met = requirements[key];
-          return (
-            <div key={key} className={`flex items-center gap-2 text-sm font-bold ${met ? "text-[#087443]" : "text-[#c02b18]"}`}>
-              <span className={`grid h-5 w-5 place-items-center rounded-full text-xs ${met ? "bg-[#dcfce7]" : "bg-[#fff1f0]"}`}>{met ? "✓" : "!"}</span>
-              {passwordRequirementLabels[key]}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function OptionDatalist({ id, options }: { id: string; options: string[] }) {
-  return (
-    <datalist id={id}>
-      {options.map((option) => (
-        <option key={option} value={option} />
-      ))}
-    </datalist>
-  );
-}
-
 function mentorTypeLabel(user: User) {
   const labels: Record<MentorType, string> = {
     senior: "Senior",
@@ -981,54 +272,6 @@ function mentorTypeLabel(user: User) {
     other: user.mentor_type_other || "Other",
   };
   return user.mentor_type ? labels[user.mentor_type] : "Mentor";
-}
-
-function Logo({ centered = false }: { centered?: boolean }) {
-  return (
-    <h1 className={`brand-serif text-3xl font-black ${centered ? "text-center" : ""}`}>
-      <span className="text-nusPurple">NUS</span>
-      <span className="text-nusOrange">phere</span>
-    </h1>
-  );
-}
-
-type View = "home" | "find" | "qa" | "messages" | "mentor-profile" | "my-profile";
-
-function Nav({ activeView, setActiveView, user, onLogout }: { activeView: string; setActiveView: (view: View) => void; user: User; onLogout: () => void }) {
-  return (
-    <nav className="sticky top-0 z-10 flex min-h-[70px] flex-wrap items-center justify-between gap-4 border-b border-[#cfd6e6] bg-white px-8 py-3">
-      <Logo />
-      <div className="flex flex-wrap items-center justify-center gap-2 text-base font-bold text-[#697085]">
-        <button className={`rounded-lg px-4 py-2 ${activeView === "home" ? "bg-[#f3f0ff] text-nusPurple" : ""}`} onClick={() => setActiveView("home")}>
-          Home
-        </button>
-        <button className={`rounded-lg px-4 py-2 ${activeView === "find" ? "bg-[#f3f0ff] text-nusPurple" : ""}`} onClick={() => setActiveView("find")}>
-          Find Mentors
-        </button>
-        <button className={`rounded-lg px-4 py-2 ${activeView === "qa" ? "bg-[#f3f0ff] text-nusPurple" : ""}`} onClick={() => setActiveView("qa")}>
-          Q&A
-        </button>
-        <button className={`rounded-lg px-4 py-2 ${activeView === "messages" ? "bg-[#f3f0ff] text-nusPurple" : ""}`} onClick={() => setActiveView("messages")}>
-          Messages
-        </button>
-        <button className={`rounded-lg px-4 py-2 ${activeView === "my-profile" ? "bg-[#f3f0ff] text-nusPurple" : ""}`} onClick={() => setActiveView("my-profile")}>
-          Profile
-        </button>
-      </div>
-      <div className="flex items-center gap-3">
-        <button className="grid h-11 w-11 place-items-center rounded-xl border border-[#cfd6e6] bg-[#f4f6fb]" aria-label="Notifications">
-          <Bell size={18} />
-        </button>
-        <button className="grid h-11 w-11 place-items-center rounded-xl border border-[#cfd6e6] bg-[#f4f6fb] text-[#697085]" onClick={() => setActiveView("my-profile")} aria-label="My profile">
-          <UserRound size={18} />
-        </button>
-        <div className="grid h-12 w-12 place-items-center rounded-full bg-nusOrange text-sm font-black text-white">{user.name.slice(0, 2).toUpperCase()}</div>
-        <button className="grid h-11 w-11 place-items-center rounded-xl border border-[#cfd6e6] bg-white text-[#697085]" onClick={onLogout} aria-label="Log out">
-          <LogOut size={18} />
-        </button>
-      </div>
-    </nav>
-  );
 }
 
 function Dashboard({
