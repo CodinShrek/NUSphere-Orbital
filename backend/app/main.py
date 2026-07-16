@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import os
-import hashlib
-import hmac
-import secrets
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
@@ -12,20 +9,20 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from .auth import claims_from_authorization
 from .database import get_db
 from .ai_matching import cosine_similarity, embed_text, goal_search_text, match_explanation, profile_completeness, structured_overlap, user_profile_text
-from .models import AnswerRecord, ConnectionRecord, ConversationRecord, MessageRecord, ProfileEmbeddingRecord, QuestionRecord, SessionRecord, UserRecord
+from .models import AnswerRecord, ConnectionRecord, ConversationRecord, MessageRecord, ProfileEmbeddingRecord, QuestionRecord, UserRecord
 
 
 Role = Literal["student", "mentor"]
 MentorType = Literal["senior", "alumni", "professor", "nus_staff", "other"]
 
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8)
+class ProfileSyncRequest(BaseModel):
     role: Role
     name: str
     faculty: str = "Computing"
@@ -80,12 +77,6 @@ class UserUpdate(BaseModel):
     profile_picture: str | None = None
 
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-    role: Role
-
-
 class UserPublic(BaseModel):
     id: str
     email: EmailStr
@@ -114,15 +105,6 @@ class UserPublic(BaseModel):
     office_location: str | None = None
     office: str | None = None
     profile_picture: str | None = None
-
-
-class AuthResponse(BaseModel):
-    token: str
-    user: UserPublic
-
-
-class LogoutRequest(BaseModel):
-    token: str
 
 
 class Mentor(BaseModel):
@@ -162,10 +144,6 @@ class RecommendationRequest(BaseModel):
 class GoalSearchRequest(BaseModel):
     query: str = Field(min_length=20)
     minimum_score: int = 0
-
-
-class StoredUser(UserPublic):
-    password: str
 
 
 class QuestionCreate(BaseModel):
@@ -262,28 +240,10 @@ app.add_middleware(
 static_mentors: list[Mentor] = []
 
 
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000).hex()
-    return f"pbkdf2_sha256${salt}${digest}"
-
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    try:
-        algorithm, salt, digest = stored_hash.split("$", 2)
-    except ValueError:
-        return False
-    if algorithm != "pbkdf2_sha256":
-        return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000).hex()
-    return hmac.compare_digest(candidate, digest)
-
-
-def user_from_record(record: UserRecord) -> StoredUser:
-    return StoredUser(
+def public_user(record: UserRecord) -> UserPublic:
+    return UserPublic(
         id=record.id,
         email=record.email,
-        password=record.password_hash,
         role=record.role,  # type: ignore[arg-type]
         name=record.name,
         faculty=record.faculty,
@@ -310,12 +270,6 @@ def user_from_record(record: UserRecord) -> StoredUser:
         office=record.office,
         profile_picture=record.profile_picture,
     )
-
-
-def public_user(user: StoredUser | UserRecord) -> UserPublic:
-    if isinstance(user, UserRecord):
-        user = user_from_record(user)
-    return UserPublic(**user.model_dump(exclude={"password"}))
 
 
 def answer_from_record(record: AnswerRecord) -> AnswerPublic:
@@ -383,26 +337,15 @@ def connection_from_record(record: ConnectionRecord) -> ConnectionPublic:
     )
 
 
-def create_session(user: UserRecord, db: Session) -> AuthResponse:
-    token = f"demo_{uuid4().hex}"
-    db.add(SessionRecord(token=token, user_id=user.id))
-    db.commit()
-    return AuthResponse(token=token, user=public_user(user))
-
-
 def get_user_from_token(authorization: str | None, db: Session) -> UserRecord:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing auth token")
-
-    token = authorization.removeprefix("Bearer ").strip()
-    session = db.get(SessionRecord, token)
-    if session is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired auth token")
-    user = db.get(UserRecord, session.user_id)
+    claims = claims_from_authorization(authorization)
+    user = db.scalar(
+        select(UserRecord).where(UserRecord.supabase_user_id == claims.user_id)
+    )
     if user is None:
-        db.delete(session)
-        db.commit()
-        raise HTTPException(status_code=401, detail="Invalid or expired auth token")
+        raise HTTPException(
+            status_code=404, detail="NUSphere profile not found; complete profile setup"
+        )
 
     return user
 
@@ -556,7 +499,7 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def mentor_from_user(user: StoredUser | UserRecord, answers_count: int = 0) -> Mentor:
+def mentor_from_user(user: UserRecord, answers_count: int = 0) -> Mentor:
     mentor_type_labels = {
         "senior": "Senior Student",
         "alumni": "Alumni",
@@ -750,42 +693,94 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/auth/register", response_model=AuthResponse)
-def register(payload: UserCreate, db: Session = Depends(get_db)) -> AuthResponse:
-    if db.scalar(select(UserRecord).where(UserRecord.email == str(payload.email))) is not None:
-        raise HTTPException(status_code=409, detail="Account already exists")
-
-    values = payload.model_dump(exclude={"email", "password"})
-    user = UserRecord(
-        id=f"u_{uuid4().hex[:10]}",
-        email=str(payload.email),
-        password_hash=hash_password(payload.password),
-        **values,
+@app.put("/auth/profile", response_model=UserPublic)
+def sync_profile(
+    payload: ProfileSyncRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> UserPublic:
+    claims = claims_from_authorization(authorization)
+    user = db.scalar(
+        select(UserRecord).where(UserRecord.supabase_user_id == claims.user_id)
     )
-    db.add(user)
-    db.flush()
-    upsert_profile_embedding(user, db)
-    db.commit()
+    email_owner = db.scalar(select(UserRecord).where(UserRecord.email == claims.email))
+
+    if user is None and email_owner is not None:
+        if email_owner.supabase_user_id not in (None, claims.user_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Email is already linked to another Supabase account",
+            )
+        user = email_owner
+
+    if user is not None and email_owner is not None and user.id != email_owner.id:
+        raise HTTPException(
+            status_code=409, detail="Email is already used by another NUSphere profile"
+        )
+
+    if user is not None and user.role != payload.role:
+        raise HTTPException(
+            status_code=409,
+            detail="Account role cannot be changed after profile creation",
+        )
+
+    values = payload.model_dump()
+    if user is None:
+        user = UserRecord(
+            id=f"u_{uuid4().hex[:10]}",
+            email=claims.email,
+            supabase_user_id=claims.user_id,
+            password_hash=None,
+            **values,
+        )
+        db.add(user)
+    else:
+        user.email = claims.email
+        user.supabase_user_id = claims.user_id
+        user.password_hash = None
+        for field, value in values.items():
+            setattr(user, field, value)
+
+    try:
+        db.flush()
+        upsert_profile_embedding(user, db)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Supabase account is already linked to another profile",
+        ) from exc
+
     db.refresh(user)
-    return create_session(user, db)
+    return public_user(user)
 
 
-@app.post("/auth/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
-    user = db.scalar(select(UserRecord).where(UserRecord.email == str(payload.email)))
-    if user is None or not verify_password(payload.password, user.password_hash) or user.role != payload.role:
-        raise HTTPException(status_code=401, detail="Invalid email, password, or role")
+@app.post("/auth/register", status_code=410)
+def legacy_register() -> None:
+    raise HTTPException(
+        status_code=410, detail="Registration is now managed by Supabase Auth"
+    )
 
-    return create_session(user, db)
+
+@app.post("/auth/login", status_code=410)
+def legacy_login() -> None:
+    raise HTTPException(status_code=410, detail="Login is now managed by Supabase Auth")
 
 
 @app.get("/auth/me", response_model=UserPublic)
-def me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> UserPublic:
+def me(
+    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
+) -> UserPublic:
     return public_user(get_user_from_token(authorization, db))
 
 
 @app.patch("/auth/me", response_model=UserPublic)
-def update_me(payload: UserUpdate, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> UserPublic:
+def update_me(
+    payload: UserUpdate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> UserPublic:
     user = get_user_from_token(authorization, db)
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -796,13 +791,11 @@ def update_me(payload: UserUpdate, authorization: str | None = Header(default=No
     return public_user(user)
 
 
-@app.post("/auth/logout")
-def logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> dict[str, str]:
-    session = db.get(SessionRecord, payload.token)
-    if session:
-        db.delete(session)
-        db.commit()
-    return {"status": "logged_out"}
+@app.post("/auth/logout", status_code=410)
+def legacy_logout() -> None:
+    raise HTTPException(
+        status_code=410, detail="Logout is now managed by Supabase Auth"
+    )
 
 
 @app.get("/mentors", response_model=list[Mentor])
@@ -1011,7 +1004,7 @@ def start_conversation(mentor_id: str, authorization: str | None = Header(defaul
     )
     if existing:
         return conversation_from_record(existing)
-    conversation = ensure_conversation_for_connection(connection, db)
+    ensure_conversation_for_connection(connection, db)
     db.commit()
     refreshed = db.scalar(
         select(ConversationRecord)

@@ -49,9 +49,11 @@ Set this Railway environment variable:
 ```text
 FRONTEND_ORIGINS=https://nusphere-sigma.vercel.app
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_JWT_AUDIENCE=authenticated
 ```
 
-`FRONTEND_ORIGINS` allows the deployed frontend to call the backend from the browser. `DATABASE_URL` connects the backend to the persistent PostgreSQL database.
+`FRONTEND_ORIGINS` allows the deployed frontend to call the backend from the browser. `DATABASE_URL` connects the backend to the persistent PostgreSQL database. `SUPABASE_URL` identifies the issuer and JWKS endpoint used to validate access tokens; no service-role key is required by the backend.
 
 If using Supabase, copy the PostgreSQL connection string from the Supabase project database settings. If using Railway PostgreSQL, add a PostgreSQL service to the same Railway project and use its generated database URL.
 
@@ -62,7 +64,7 @@ OPENAI_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
-These can stay blank until the AI assistant or external auth flows are connected.
+These can stay blank until the AI assistant integrations are connected.
 
 ## Vercel Frontend
 
@@ -87,20 +89,21 @@ After changing this variable, redeploy the Vercel project so the frontend uses t
 
 1. Deploy the backend on Railway.
 2. Add a PostgreSQL database through Supabase or Railway.
-3. Set `DATABASE_URL` in Railway.
-4. Generate a Railway public domain.
-5. Confirm the deployment logs show `alembic upgrade head` completed, then verify `/health`.
-6. Deploy the frontend on Vercel.
-7. Add the Vercel URL to `FRONTEND_ORIGINS` in Railway.
-8. Redeploy the Railway backend.
-9. Test login, signup, profile edits, recommendations, Q&A archive, messages, and logout on the Vercel site.
+3. Set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_JWT_AUDIENCE` in Railway.
+4. Enable email confirmation and asymmetric signing keys in the Supabase Auth project.
+5. Generate a Railway public domain.
+6. Confirm the deployment logs show `alembic upgrade head` completed, then verify `/health`.
+7. Deploy the Supabase-enabled frontend on Vercel.
+8. Add the Vercel URL to `FRONTEND_ORIGINS` in Railway.
+9. Redeploy the Railway backend.
+10. Test login, signup/profile synchronization, profile edits, recommendations, Q&A archive, messages, and logout on the Vercel site.
 
 ## Database Schema
 
 The baseline Alembic migration creates these SQLAlchemy tables:
 
-- `users`: signup fields, student/mentor profile fields, profile pictures, interests, goals, and mentor metadata
-- `sessions`: active login sessions
+- `users`: Supabase identity, student/mentor profile fields, profile pictures, interests, goals, and mentor metadata
+- `sessions`: legacy table retained temporarily for migration compatibility
 - `questions`: Q&A/knowledge archive posts, tags, attachments, and generated key terms
 - `answers`: mentor responses and archive summaries
 - `conversations`: student-mentor chat threads
@@ -123,4 +126,6 @@ If the Vercel site loads but login fails:
 - Check that `NEXT_PUBLIC_API_URL` points to the Railway backend.
 - Check that `FRONTEND_ORIGINS` in Railway contains the exact Vercel URL, without a trailing slash.
 - Check that `DATABASE_URL` is set and the database service is running.
+- Check that `SUPABASE_URL` exactly matches the project issuing the frontend access token.
+- Confirm the frontend sends the Supabase access token in the `Authorization: Bearer <token>` header.
 - Redeploy both services after changing environment variables.

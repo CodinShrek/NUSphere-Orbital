@@ -23,7 +23,8 @@ class UserRecord(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    supabase_user_id: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     faculty: Mapped[str] = mapped_column(String(255), nullable=False, index=True, default="Computing")

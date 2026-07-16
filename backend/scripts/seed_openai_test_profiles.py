@@ -7,9 +7,9 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from backend.app.ai_matching import OPENAI_EMBEDDING_MODEL, embed_text
+from backend.app.ai_matching import embed_text
 from backend.app.database import SessionLocal
-from backend.app.main import hash_password, upsert_profile_embedding
+from backend.app.main import upsert_profile_embedding
 from backend.app.models import (
     AnswerRecord,
     ConnectionRecord,
@@ -246,7 +246,7 @@ def create_profile(db, profile: dict[str, object]) -> str:
     user = UserRecord(
         id=f"u_{uuid4().hex[:10]}",
         email=str(values.pop("email")),
-        password_hash=hash_password("Password1"),
+        password_hash=None,
         **values,
     )
     db.add(user)

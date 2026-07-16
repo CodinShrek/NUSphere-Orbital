@@ -126,16 +126,24 @@ Backend:
 ```text
 FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 DATABASE_URL=sqlite:///./nusphere.db
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_JWT_AUDIENCE=authenticated
 ```
 
-For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway backend URL, `FRONTEND_ORIGINS` should include the Vercel frontend URL, and `DATABASE_URL` should point to the managed PostgreSQL database connection string.
+For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway backend URL, `FRONTEND_ORIGINS` should include the Vercel frontend URL, `DATABASE_URL` should point to the managed PostgreSQL database connection string, and `SUPABASE_URL` should identify the Supabase project that issues access tokens.
+
+## Authentication
+
+The backend validates Supabase access-token signatures, issuer, audience, expiry, and subject against the project's JWKS endpoint. After Supabase signup, the frontend sends the access token as `Authorization: Bearer <token>` to `PUT /auth/profile`; this creates the application profile or synchronizes the existing profile. Email comes from the signed token rather than the request body, and an account's student/mentor role cannot be changed after creation.
+
+Existing local profiles are linked by matching the authenticated Supabase email. Keep Supabase email confirmation enabled before migrating real accounts so an email address must be verified before it can claim an existing profile. The backend does not need a Supabase service-role key.
 
 ## Database Storage
 
 The backend stores application data through SQLAlchemy tables instead of in-memory dictionaries.
 
-- `users`: signup data, student and mentor profiles, profile pictures, interests, goals, mentor type fields, and profile edits
-- `sessions`: active login tokens
+- `users`: Supabase user identity, student and mentor profiles, profile pictures, interests, goals, mentor type fields, and profile edits
+- `sessions`: retained temporarily for migration compatibility; no longer used for authentication
 - `questions`: Q&A posts, knowledge archive tags, attachment names, and generated key terms
 - `answers`: mentor responses and archive summaries
 - `conversations`: student-mentor chat threads
@@ -155,9 +163,7 @@ alembic upgrade head
 
 ## Current Limitations
 
-This is still an MVP-stage system, so some parts are intentionally lightweight:
-
-- Supabase Auth is not connected yet.
+This is still an MVP-stage system. The backend Supabase JWT flow is implemented, but the frontend must complete its Supabase client migration before this backend version is deployed.
 - Mentor recommendation logic is currently rule-based rather than embedding-based.
 - Ratings and the AI assistant are still future features.
 
