@@ -1,23 +1,22 @@
 import type {
-  AuthResponse,
   Connection,
   Conversation,
   Mentor,
+  ProfileSyncPayload,
   Question,
-  RegisterPayload,
-  Role,
   UpdateProfilePayload,
   User,
 } from "@/types/api";
 
 export type {
   Answer,
-  AuthResponse,
+  AuthenticatedSession,
   Connection,
   Conversation,
   ConversationMessage,
   Mentor,
   MentorType,
+  ProfileSyncPayload,
   Question,
   RegisterPayload,
   Role,
@@ -45,25 +44,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function login(email: string, password: string, role: Role) {
-  return request<AuthResponse>("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password, role }),
-  });
-}
-
-export function register(payload: RegisterPayload) {
-  return request<AuthResponse>("/auth/register", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
 export function fetchCurrentUser(token: string) {
   return request<User>("/auth/me", {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+  });
+}
+
+export function syncProfile(token: string, payload: ProfileSyncPayload) {
+  return request<User>("/auth/profile", {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
   });
 }
 
@@ -74,13 +69,6 @@ export function updateProfile(token: string, payload: UpdateProfilePayload) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(payload),
-  });
-}
-
-export function logout(token: string) {
-  return request<{ status: string }>("/auth/logout", {
-    method: "POST",
-    body: JSON.stringify({ token }),
   });
 }
 

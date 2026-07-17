@@ -117,7 +117,7 @@ export type Connection = {
   updated_at: string;
 };
 
-export type AuthResponse = {
+export type AuthenticatedSession = {
   token: string;
   user: User;
 };
@@ -152,6 +152,6 @@ export type RegisterPayload = {
   profile_picture?: string;
 };
 
-export type UpdateProfilePayload = Partial<
-  Omit<RegisterPayload, "email" | "password" | "role">
->;
+export type ProfileSyncPayload = Omit<RegisterPayload, "email" | "password">;
+
+export type UpdateProfilePayload = Partial<Omit<ProfileSyncPayload, "role">>;

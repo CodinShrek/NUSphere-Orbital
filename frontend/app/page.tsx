@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Search, Star, Zap } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppShell } from "@/components/layout/AppShell";
@@ -24,17 +25,17 @@ import {
   fetchAiProfileMatches,
   fetchConversations,
   fetchConnections,
-  fetchCurrentUser,
   fetchQuestions,
   fetchRecommendations,
-  logout,
   requestConnection,
   sendConversationMessage,
   startConversation,
   updateProfile,
 } from "@/lib/api";
+import { authenticateSession, signOut } from "@/lib/auth";
 import { splitList } from "@/lib/profile-utils";
-import type { AuthResponse, Connection, Conversation, Mentor, MentorType, Question, User } from "@/types/api";
+import { getSupabaseClient } from "@/lib/supabase";
+import type { AuthenticatedSession, Connection, Conversation, Mentor, MentorType, Question, User } from "@/types/api";
 import type { View } from "@/types/navigation";
 
 export default function Home() {
@@ -48,18 +49,96 @@ export default function Home() {
   const [activeView, setActiveView] = useState<View>("home");
   const [selectedMentorId, setSelectedMentorId] = useState("");
   const [error, setError] = useState("");
+  const [authLoading, setAuthLoading] = useState(true);
+  const authAttempt = useRef(0);
   const selectedMentor = mentors.find((mentor) => mentor.id === selectedMentorId) ?? mentors[0];
 
   useEffect(() => {
-    const savedToken = window.localStorage.getItem("nusphere_token");
-    if (!savedToken) return;
+    let active = true;
+    let supabase: ReturnType<typeof getSupabaseClient>;
+    try {
+      supabase = getSupabaseClient();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Supabase is not configured",
+      );
+      setAuthLoading(false);
+      return;
+    }
 
-    fetchCurrentUser(savedToken)
-      .then((currentUser) => {
-        setToken(savedToken);
-        setUser(currentUser);
+    function clearAuthenticatedState() {
+      setToken("");
+      setUser(null);
+      setMentors([]);
+      setQuestions([]);
+      setConnections([]);
+      setConversations([]);
+      setActiveConversationId("");
+      setActiveView("home");
+    }
+
+    async function restoreSession(session: Session | null) {
+      const attempt = ++authAttempt.current;
+      if (!session) {
+        if (active) {
+          clearAuthenticatedState();
+          setAuthLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const authenticated = await authenticateSession(session);
+        if (!active || attempt !== authAttempt.current) return;
+        setToken(authenticated.token);
+        setUser(authenticated.user);
+        setError("");
+      } catch (err) {
+        if (!active || attempt !== authAttempt.current) return;
+        clearAuthenticatedState();
+        setError(
+          err instanceof Error ? err.message : "Unable to restore your session",
+        );
+      } finally {
+        if (active && attempt === authAttempt.current) setAuthLoading(false);
+      }
+    }
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === "INITIAL_SESSION") return;
+        if (event === "SIGNED_OUT" || !session) {
+          ++authAttempt.current;
+          clearAuthenticatedState();
+          setAuthLoading(false);
+          return;
+        }
+        if (event === "TOKEN_REFRESHED") {
+          setToken(session.access_token);
+          return;
+        }
+        window.setTimeout(() => void restoreSession(session), 0);
+      },
+    );
+
+    void supabase.auth
+      .getSession()
+      .then(({ data, error: sessionError }) => {
+        if (sessionError) throw sessionError;
+        return restoreSession(data.session);
       })
-      .catch(() => window.localStorage.removeItem("nusphere_token"));
+      .catch((err: unknown) => {
+        if (!active) return;
+        setError(
+          err instanceof Error ? err.message : "Unable to restore your session",
+        );
+        setAuthLoading(false);
+      });
+
+    return () => {
+      active = false;
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -89,26 +168,28 @@ export default function Home() {
       .catch((err: Error) => setError(err.message));
   }, [token]);
 
-  function handleAuthenticated(response: AuthResponse) {
+  function handleAuthenticated(response: AuthenticatedSession) {
     setToken(response.token);
     setUser(response.user);
+    setError("");
     setActiveView("home");
-    window.localStorage.setItem("nusphere_token", response.token);
   }
 
   async function handleLogout() {
-    if (token) {
-      await logout(token).catch(() => undefined);
+    try {
+      await signOut();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to sign out");
+    } finally {
+      setToken("");
+      setUser(null);
+      setMentors([]);
+      setQuestions([]);
+      setConnections([]);
+      setConversations([]);
+      setActiveConversationId("");
+      setActiveView("home");
     }
-    setToken("");
-    setUser(null);
-    setMentors([]);
-    setQuestions([]);
-    setConnections([]);
-    setConversations([]);
-    setActiveConversationId("");
-    setActiveView("home");
-    window.localStorage.removeItem("nusphere_token");
   }
 
   async function handleCreateQuestion(payload: { title: string; topic: string; body: string; tags: string[]; attachments: string[] }) {
@@ -180,6 +261,19 @@ export default function Home() {
   function handleOpenMentorProfile(mentorId: string) {
     setSelectedMentorId(mentorId);
     setActiveView("mentor-profile");
+  }
+
+  if (authLoading) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[linear-gradient(120deg,#f2f5ff,#ffffff)] px-5">
+        <div className="card px-8 py-7 text-center shadow-soft">
+          <p className="font-black text-nusPurple">NUSphere</p>
+          <p className="mt-2 text-sm font-semibold text-[#737b8f]">
+            Restoring your session...
+          </p>
+        </div>
+      </main>
+    );
   }
 
   if (!user) {

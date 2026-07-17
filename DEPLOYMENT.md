@@ -81,9 +81,11 @@ Set this Vercel environment variable:
 
 ```text
 NEXT_PUBLIC_API_URL=https://nusphere-production-c2e3.up.railway.app
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_OR_PUBLISHABLE_KEY
 ```
 
-After changing this variable, redeploy the Vercel project so the frontend uses the deployed backend instead of localhost.
+Use only the public Supabase anon or publishable key in Vercel; never add the service-role key to the frontend. Add the Vercel production URL to Supabase Auth's allowed redirect URLs, then redeploy so the frontend uses the deployed backend and Supabase project.
 
 ## Deployment Order
 

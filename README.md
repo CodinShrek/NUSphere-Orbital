@@ -119,6 +119,8 @@ Frontend:
 
 ```text
 NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_OR_PUBLISHABLE_KEY
 ```
 
 Backend:
@@ -134,7 +136,9 @@ For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway back
 
 ## Authentication
 
-The backend validates Supabase access-token signatures, issuer, audience, expiry, and subject against the project's JWKS endpoint. After Supabase signup, the frontend sends the access token as `Authorization: Bearer <token>` to `PUT /auth/profile`; this creates the application profile or synchronizes the existing profile. Email comes from the signed token rather than the request body, and an account's student/mentor role cannot be changed after creation.
+The frontend uses Supabase Auth for signup, password login, persistent session restoration, automatic token refresh, and logout. The backend validates Supabase access-token signatures, issuer, audience, expiry, and subject against the project's JWKS endpoint. After Supabase signup, the frontend sends the access token as `Authorization: Bearer <token>` to `PUT /auth/profile`; this creates the application profile or synchronizes the existing profile. Email comes from the signed token rather than the request body, and an account's student/mentor role cannot be changed after creation.
+
+When email confirmation is enabled, the browser temporarily stores the pending profile form until the confirmed user returns and a Supabase session is available. It removes that pending data immediately after a successful profile synchronization. Never expose a Supabase service-role key through a `NEXT_PUBLIC_` variable.
 
 Existing local profiles are linked by matching the authenticated Supabase email. Keep Supabase email confirmation enabled before migrating real accounts so an email address must be verified before it can claim an existing profile. The backend does not need a Supabase service-role key.
 
@@ -163,7 +167,7 @@ alembic upgrade head
 
 ## Current Limitations
 
-This is still an MVP-stage system. The backend Supabase JWT flow is implemented, but the frontend must complete its Supabase client migration before this backend version is deployed.
+This is still an MVP-stage system.
 - Mentor recommendation logic is currently rule-based rather than embedding-based.
 - Ratings and the AI assistant are still future features.
 

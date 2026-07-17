@@ -16,18 +16,18 @@ import {
   opportunities,
   pastel,
 } from "@/data/profile-options";
-import { login, register } from "@/lib/api";
+import { signIn, signUp } from "@/lib/auth";
 import {
   formatConsultationSlots,
   splitList,
   toggleSlot,
 } from "@/lib/profile-utils";
-import type { AuthResponse, MentorType, Role } from "@/types/api";
+import type { AuthenticatedSession, MentorType, Role } from "@/types/api";
 
 type AuthScreenProps = {
   error: string;
   onError: (message: string) => void;
-  onAuthenticated: (response: AuthResponse) => void;
+  onAuthenticated: (response: AuthenticatedSession) => void;
 };
 
 export function AuthScreen({
@@ -37,6 +37,8 @@ export function AuthScreen({
 }: AuthScreenProps) {
   const [activeRole, setActiveRole] = useState<Role>("student");
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [notice, setNotice] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -82,83 +84,96 @@ export function AuthScreen({
   const passwordReady = Object.values(passwordRequirements).every(Boolean);
 
   async function submitAuth() {
+    if (isSubmitting) return;
     onError("");
+    setNotice("");
     if (mode === "register" && !passwordReady) {
       onError(
         "Please fix the password requirements before creating your account.",
       );
       return;
     }
+    setIsSubmitting(true);
     try {
-      const response =
-        mode === "login"
-          ? await login(email, password, activeRole)
-          : await register({
-              email,
-              password,
-              role: activeRole,
-              name,
-              faculty,
-              major,
-              modules_taken: splitList(modulesTaken),
-              ccas: splitList(ccaText),
-              nus_opportunities: splitList(opportunityText),
-              exchange_universities: splitList(exchangeText),
-              accommodation,
-              interests: splitList(interests),
-              goals: splitList(goals),
-              bio,
-              mentor_type: activeRole === "mentor" ? mentorType : undefined,
-              mentorship_goals:
-                activeRole === "mentor" ? mentorshipGoals : undefined,
-              mentor_type_other:
-                activeRole === "mentor" && mentorType === "other"
-                  ? mentorTypeOther
-                  : undefined,
-              graduation_year:
-                activeRole === "mentor" && mentorType === "alumni"
-                  ? graduationYear
-                  : undefined,
-              current_role:
-                activeRole === "mentor" &&
-                ["alumni", "other"].includes(mentorType)
-                  ? currentRole
-                  : undefined,
-              organisation:
-                activeRole === "mentor" &&
-                ["alumni", "other"].includes(mentorType)
-                  ? organisation
-                  : undefined,
-              department:
-                activeRole === "mentor" &&
-                ["professor", "nus_staff"].includes(mentorType)
-                  ? department || departmentOptions[0]
-                  : undefined,
-              consultation_hours:
-                activeRole === "mentor"
-                  ? formatConsultationSlots(selectedConsultationSlots)
-                  : undefined,
-              modules_taught:
-                activeRole === "mentor" && mentorType === "professor"
-                  ? splitList(modulesTaught)
-                  : [],
-              areas_of_expertise:
-                activeRole === "mentor" &&
-                ["professor", "nus_staff", "other"].includes(mentorType)
-                  ? splitList(areasOfExpertise)
-                  : [],
-              office_location:
-                activeRole === "mentor" && mentorType === "professor"
-                  ? officeLocation
-                  : undefined,
-              office:
-                activeRole === "mentor" && mentorType === "nus_staff"
-                  ? office
-                  : undefined,
-            });
-      onAuthenticated(response);
+      if (mode === "login") {
+        onAuthenticated(await signIn(email, password, activeRole));
+        return;
+      }
+
+      const result = await signUp({
+        email,
+        password,
+        role: activeRole,
+        name,
+        faculty,
+        major,
+        modules_taken: splitList(modulesTaken),
+        ccas: splitList(ccaText),
+        nus_opportunities: splitList(opportunityText),
+        exchange_universities: splitList(exchangeText),
+        accommodation,
+        interests: splitList(interests),
+        goals: splitList(goals),
+        bio,
+        mentor_type: activeRole === "mentor" ? mentorType : undefined,
+        mentorship_goals: activeRole === "mentor" ? mentorshipGoals : undefined,
+        mentor_type_other:
+          activeRole === "mentor" && mentorType === "other"
+            ? mentorTypeOther
+            : undefined,
+        graduation_year:
+          activeRole === "mentor" && mentorType === "alumni"
+            ? graduationYear
+            : undefined,
+        current_role:
+          activeRole === "mentor" && ["alumni", "other"].includes(mentorType)
+            ? currentRole
+            : undefined,
+        organisation:
+          activeRole === "mentor" && ["alumni", "other"].includes(mentorType)
+            ? organisation
+            : undefined,
+        department:
+          activeRole === "mentor" &&
+          ["professor", "nus_staff"].includes(mentorType)
+            ? department || departmentOptions[0]
+            : undefined,
+        consultation_hours:
+          activeRole === "mentor"
+            ? formatConsultationSlots(selectedConsultationSlots)
+            : undefined,
+        modules_taught:
+          activeRole === "mentor" && mentorType === "professor"
+            ? splitList(modulesTaught)
+            : [],
+        areas_of_expertise:
+          activeRole === "mentor" &&
+          ["professor", "nus_staff", "other"].includes(mentorType)
+            ? splitList(areasOfExpertise)
+            : [],
+        office_location:
+          activeRole === "mentor" && mentorType === "professor"
+            ? officeLocation
+            : undefined,
+        office:
+          activeRole === "mentor" && mentorType === "nus_staff"
+            ? office
+            : undefined,
+      });
+      if (result.status === "confirmation-required") {
+        setNotice(
+          `Check ${result.email} for the Supabase confirmation link, then return here and sign in.`,
+        );
+        setMode("login");
+        setPassword("");
+        setConfirmPassword("");
+        return;
+      }
+      onAuthenticated(result.session);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Unable to authenticate");
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -177,6 +192,7 @@ export function AuthScreen({
                 key={role}
                 className={`rounded-[10px] font-bold capitalize transition ${activeRole === role ? "bg-nusPurple text-white" : "text-[#687086]"}`}
                 onClick={() => {
+                  setNotice("");
                   setActiveRole(role);
                   setEmail("");
                   setPassword("");
@@ -618,10 +634,15 @@ export function AuthScreen({
           )}
 
           <button
-            className="mt-8 h-14 w-full rounded-xl bg-nusPurple font-bold text-white shadow-[0_8px_20px_rgba(95,22,238,0.25)]"
+            className="mt-8 h-14 w-full rounded-xl bg-nusPurple font-bold text-white shadow-[0_8px_20px_rgba(95,22,238,0.25)] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={submitAuth}
+            disabled={isSubmitting}
           >
-            {mode === "login" ? "Sign in" : "Create account"}
+            {isSubmitting
+              ? "Please wait..."
+              : mode === "login"
+                ? "Sign in"
+                : "Create account"}
           </button>
 
           <div className="my-8 flex items-center gap-4 text-sm font-semibold text-[#9aa1b3]">
@@ -644,11 +665,20 @@ export function AuthScreen({
             {mode === "login" ? "No account?" : "Already registered?"}{" "}
             <button
               className="font-bold text-nusPurple"
-              onClick={() => setMode(mode === "login" ? "register" : "login")}
+              onClick={() => {
+                setNotice("");
+                onError("");
+                setMode(mode === "login" ? "register" : "login");
+              }}
             >
               {mode === "login" ? "Sign up" : "Sign in"}
             </button>
           </p>
+          {notice && (
+            <p className="mt-4 rounded-lg bg-[#eef7ff] px-4 py-3 text-sm font-semibold text-[#235b91]">
+              {notice}
+            </p>
+          )}
           {error && (
             <p className="mt-4 rounded-lg bg-[#fff1f0] px-4 py-3 text-sm font-semibold text-[#c02b18]">
               {error}
