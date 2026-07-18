@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
@@ -15,11 +15,24 @@ from sqlalchemy.orm import Session, joinedload
 from .auth import claims_from_authorization
 from .database import get_db
 from .ai_matching import cosine_similarity, embed_text, goal_search_text, match_explanation, profile_completeness, structured_overlap, user_profile_text
-from .models import AnswerRecord, ConnectionRecord, ConversationRecord, MessageRecord, ProfileEmbeddingRecord, QuestionRecord, UserRecord
+from .models import (
+    AnswerRecord,
+    ConnectionRecord,
+    ConversationRecord,
+    MentorAvailabilityRecord,
+    MessageRecord,
+    ProfileEmbeddingRecord,
+    QuestionRecord,
+    ReviewRecord,
+    UserRecord,
+)
 
 
 Role = Literal["student", "mentor"]
 MentorType = Literal["senior", "alumni", "professor", "nus_staff", "other"]
+VerificationStatus = Literal["not_applicable", "unverified", "pending", "verified", "rejected"]
+Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+AvailabilityMode = Literal["online", "in_person", "hybrid"]
 
 
 class ProfileSyncRequest(BaseModel):
@@ -105,6 +118,76 @@ class UserPublic(BaseModel):
     office_location: str | None = None
     office: str | None = None
     profile_picture: str | None = None
+    verification_status: VerificationStatus = "not_applicable"
+
+
+class AvailabilitySlotInput(BaseModel):
+    day_of_week: Weekday
+    start_time: time
+    end_time: time
+    timezone: str = Field(default="Asia/Singapore", min_length=1, max_length=64)
+    mode: AvailabilityMode = "online"
+    location: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_time_range(self) -> AvailabilitySlotInput:
+        if self.end_time <= self.start_time:
+            raise ValueError("Availability end time must be after start time")
+        return self
+
+
+class AvailabilityUpdate(BaseModel):
+    slots: list[AvailabilitySlotInput] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_no_overlaps(self) -> AvailabilityUpdate:
+        for day in {slot.day_of_week for slot in self.slots}:
+            day_slots = sorted(
+                (slot for slot in self.slots if slot.day_of_week == day),
+                key=lambda slot: slot.start_time,
+            )
+            for previous, current in zip(day_slots, day_slots[1:]):
+                if current.start_time < previous.end_time:
+                    raise ValueError(f"Availability slots overlap on {day}")
+        return self
+
+
+class AvailabilitySlotPublic(AvailabilitySlotInput):
+    id: str
+    mentor_id: str
+    is_active: bool
+    created_at: str
+    updated_at: str
+
+
+class VerificationStatusPublic(BaseModel):
+    mentor_id: str
+    status: VerificationStatus
+
+
+class ReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=2000)
+
+
+class ReviewPublic(BaseModel):
+    id: str
+    connection_id: str
+    student_id: str
+    student_name: str
+    mentor_id: str
+    rating: int
+    comment: str
+    created_at: str
+    updated_at: str
+
+
+class ReviewEligibility(BaseModel):
+    mentor_id: str
+    can_review: bool
+    reason: str
+    connection_id: str | None = None
+    existing_review: ReviewPublic | None = None
 
 
 class Mentor(BaseModel):
@@ -132,6 +215,8 @@ class Mentor(BaseModel):
     bio: str
     experience: list[str]
     match_reasons: list[str] = Field(default_factory=list)
+    verification_status: VerificationStatus = "unverified"
+    availability: list[AvailabilitySlotPublic] = Field(default_factory=list)
 
 
 class RecommendationRequest(BaseModel):
@@ -269,6 +354,7 @@ def public_user(record: UserRecord) -> UserPublic:
         office_location=record.office_location,
         office=record.office,
         profile_picture=record.profile_picture,
+        verification_status=record.verification_status,  # type: ignore[arg-type]
     )
 
 
@@ -332,6 +418,36 @@ def connection_from_record(record: ConnectionRecord) -> ConnectionPublic:
         mentor_name=record.mentor_name,
         mentor_programme=record.mentor_programme,
         status=record.status,
+        created_at=record.created_at.isoformat(),
+        updated_at=record.updated_at.isoformat(),
+    )
+
+
+def availability_from_record(record: MentorAvailabilityRecord) -> AvailabilitySlotPublic:
+    return AvailabilitySlotPublic(
+        id=record.id,
+        mentor_id=record.mentor_id,
+        day_of_week=record.day_of_week,  # type: ignore[arg-type]
+        start_time=record.start_time,
+        end_time=record.end_time,
+        timezone=record.timezone,
+        mode=record.mode,  # type: ignore[arg-type]
+        location=record.location,
+        is_active=record.is_active,
+        created_at=record.created_at.isoformat(),
+        updated_at=record.updated_at.isoformat(),
+    )
+
+
+def review_from_record(record: ReviewRecord, student_name: str) -> ReviewPublic:
+    return ReviewPublic(
+        id=record.id,
+        connection_id=record.connection_id,
+        student_id=record.student_id,
+        student_name=student_name,
+        mentor_id=record.mentor_id,
+        rating=record.rating,
+        comment=record.comment,
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
     )
@@ -499,7 +615,14 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def mentor_from_user(user: UserRecord, answers_count: int = 0) -> Mentor:
+def mentor_from_user(
+    user: UserRecord,
+    answers_count: int = 0,
+    rating: float = 0,
+    reviews_count: int = 0,
+    mentees_count: int = 0,
+    availability: list[AvailabilitySlotPublic] | None = None,
+) -> Mentor:
     mentor_type_labels = {
         "senior": "Senior Student",
         "alumni": "Alumni",
@@ -553,9 +676,9 @@ def mentor_from_user(user: UserRecord, answers_count: int = 0) -> Mentor:
         faculty=user.faculty,
         department=user.department,
         role=mentor_type_label,
-        rating=0,
-        reviews=0,
-        mentees=0,
+        rating=rating,
+        reviews=reviews_count,
+        mentees=mentees_count,
         answers=answers_count,
         match_score=72,
         keyword_match_score=72,
@@ -563,6 +686,8 @@ def mentor_from_user(user: UserRecord, answers_count: int = 0) -> Mentor:
         experience_tags=experience_tags,
         bio=user.bio or user.mentorship_goals or "This mentor has not added a description yet.",
         experience=experience or ["Mentor profile created during sign up"],
+        verification_status=user.verification_status,  # type: ignore[arg-type]
+        availability=availability or [],
     )
 
 
@@ -573,8 +698,60 @@ def available_mentors(db: Session) -> list[Mentor]:
             .group_by(AnswerRecord.mentor_id)
         ).all()
     )
+    review_stats = {
+        mentor_id: (round(float(average or 0), 1), int(count))
+        for mentor_id, average, count in db.execute(
+            select(
+                ReviewRecord.mentor_id,
+                func.avg(ReviewRecord.rating),
+                func.count(ReviewRecord.id),
+            ).group_by(ReviewRecord.mentor_id)
+        ).all()
+    }
+    mentee_counts = dict(
+        db.execute(
+            select(ConnectionRecord.mentor_id, func.count(ConnectionRecord.id))
+            .where(ConnectionRecord.status == "accepted")
+            .group_by(ConnectionRecord.mentor_id)
+        ).all()
+    )
+    weekday_order = {
+        day: index
+        for index, day in enumerate(
+            [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ]
+        )
+    }
+    availability_by_mentor: dict[str, list[AvailabilitySlotPublic]] = {}
+    for slot in db.scalars(
+        select(MentorAvailabilityRecord).where(
+            MentorAvailabilityRecord.is_active.is_(True)
+        )
+    ).all():
+        availability_by_mentor.setdefault(slot.mentor_id, []).append(
+            availability_from_record(slot)
+        )
+    for slots in availability_by_mentor.values():
+        slots.sort(
+            key=lambda slot: (weekday_order[slot.day_of_week], slot.start_time)
+        )
+
     registered_mentors = [
-        mentor_from_user(user, int(answer_counts.get(user.id, 0)))
+        mentor_from_user(
+            user,
+            answers_count=int(answer_counts.get(user.id, 0)),
+            rating=review_stats.get(user.id, (0, 0))[0],
+            reviews_count=review_stats.get(user.id, (0, 0))[1],
+            mentees_count=int(mentee_counts.get(user.id, 0)),
+            availability=availability_by_mentor.get(user.id, []),
+        )
         for user in db.scalars(select(UserRecord).where(UserRecord.role == "mentor")).all()
     ]
     return [*registered_mentors, *static_mentors]
@@ -585,6 +762,62 @@ def find_mentor_by_id(mentor_id: str, db: Session) -> Mentor:
         if mentor.id == mentor_id:
             return mentor
     raise HTTPException(status_code=404, detail="Mentor not found")
+
+
+def accepted_connection_for_review(
+    student_id: str, mentor_id: str, db: Session
+) -> ConnectionRecord | None:
+    return db.scalar(
+        select(ConnectionRecord).where(
+            ConnectionRecord.student_id == student_id,
+            ConnectionRecord.mentor_id == mentor_id,
+            ConnectionRecord.status == "accepted",
+        )
+    )
+
+
+def review_eligibility_for(
+    student: UserRecord, mentor_id: str, db: Session
+) -> ReviewEligibility:
+    mentor = db.scalar(
+        select(UserRecord).where(
+            UserRecord.id == mentor_id, UserRecord.role == "mentor"
+        )
+    )
+    if mentor is None:
+        raise HTTPException(status_code=404, detail="Mentor not found")
+    if student.role != "student":
+        return ReviewEligibility(
+            mentor_id=mentor_id,
+            can_review=False,
+            reason="Only students can review mentors",
+        )
+
+    connection = accepted_connection_for_review(student.id, mentor_id, db)
+    if connection is None:
+        return ReviewEligibility(
+            mentor_id=mentor_id,
+            can_review=False,
+            reason="An accepted mentor connection is required before reviewing",
+        )
+
+    existing = db.scalar(
+        select(ReviewRecord).where(ReviewRecord.connection_id == connection.id)
+    )
+    if existing is not None:
+        return ReviewEligibility(
+            mentor_id=mentor_id,
+            can_review=False,
+            reason="A review has already been submitted for this connection",
+            connection_id=connection.id,
+            existing_review=review_from_record(existing, student.name),
+        )
+    return ReviewEligibility(
+        mentor_id=mentor_id,
+        can_review=True,
+        reason="Accepted mentor connection found",
+        connection_id=connection.id,
+    )
 
 
 def ensure_conversation_for_connection(connection: ConnectionRecord, db: Session) -> ConversationRecord:
@@ -647,14 +880,9 @@ def ensure_profile_embedding(user: UserRecord, db: Session) -> ProfileEmbeddingR
 
 def ai_ranked_mentors(student: UserRecord, query_embedding: list[float], db: Session, mode: str, minimum_score: int = 0) -> list[Mentor]:
     mentors = db.scalars(select(UserRecord).where(UserRecord.role == "mentor")).all()
+    mentor_profiles = {mentor.id: mentor for mentor in available_mentors(db)}
     keyword_request = recommendation_request_from_user(student)
     student_profile_embedding = ensure_profile_embedding(student, db)
-    answer_counts = dict(
-        db.execute(
-            select(AnswerRecord.mentor_id, func.count(AnswerRecord.id))
-            .group_by(AnswerRecord.mentor_id)
-        ).all()
-    )
     ranked: list[Mentor] = []
     for mentor_user in mentors:
         embedding_record = ensure_profile_embedding(mentor_user, db)
@@ -666,7 +894,7 @@ def ai_ranked_mentors(student: UserRecord, query_embedding: list[float], db: Ses
         final_score = round((semantic * 0.7 + overlap * 0.15 + faculty_boost * 0.1 + completeness * 0.05) * 100)
         bounded_score = max(0, min(99, final_score))
         profile_score = max(0, min(99, round((profile_semantic * 0.7 + overlap * 0.15 + faculty_boost * 0.1 + completeness * 0.05) * 100)))
-        base_mentor = mentor_from_user(mentor_user, int(answer_counts.get(mentor_user.id, 0)))
+        base_mentor = mentor_profiles[mentor_user.id]
         keyword_score = score_mentor(base_mentor, keyword_request)
         score_update = {
             "match_score": bounded_score,
@@ -731,6 +959,9 @@ def sync_profile(
             email=claims.email,
             supabase_user_id=claims.user_id,
             password_hash=None,
+            verification_status=(
+                "unverified" if payload.role == "mentor" else "not_applicable"
+            ),
             **values,
         )
         db.add(user)
@@ -738,6 +969,8 @@ def sync_profile(
         user.email = claims.email
         user.supabase_user_id = claims.user_id
         user.password_hash = None
+        if user.role == "mentor" and user.verification_status == "not_applicable":
+            user.verification_status = "unverified"
         for field, value in values.items():
             setattr(user, field, value)
 
@@ -801,6 +1034,209 @@ def legacy_logout() -> None:
 @app.get("/mentors", response_model=list[Mentor])
 def list_mentors(db: Session = Depends(get_db)) -> list[Mentor]:
     return available_mentors(db)
+
+
+@app.put("/mentors/me/availability", response_model=list[AvailabilitySlotPublic])
+def replace_my_availability(
+    payload: AvailabilityUpdate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[AvailabilitySlotPublic]:
+    mentor = get_user_from_token(authorization, db)
+    if mentor.role != "mentor":
+        raise HTTPException(
+            status_code=403, detail="Only mentors can update availability"
+        )
+
+    existing_slots = db.scalars(
+        select(MentorAvailabilityRecord).where(
+            MentorAvailabilityRecord.mentor_id == mentor.id
+        )
+    ).all()
+    for slot in existing_slots:
+        db.delete(slot)
+    db.flush()
+
+    created_slots = [
+        MentorAvailabilityRecord(
+            id=f"av_{uuid4().hex[:10]}",
+            mentor_id=mentor.id,
+            day_of_week=slot.day_of_week,
+            start_time=slot.start_time,
+            end_time=slot.end_time,
+            timezone=slot.timezone,
+            mode=slot.mode,
+            location=slot.location,
+            is_active=True,
+        )
+        for slot in payload.slots
+    ]
+    db.add_all(created_slots)
+    db.commit()
+    for slot in created_slots:
+        db.refresh(slot)
+    return [availability_from_record(slot) for slot in created_slots]
+
+
+@app.post(
+    "/mentors/me/verification",
+    response_model=VerificationStatusPublic,
+)
+def request_mentor_verification(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> VerificationStatusPublic:
+    mentor = get_user_from_token(authorization, db)
+    if mentor.role != "mentor":
+        raise HTTPException(
+            status_code=403, detail="Only mentors can request verification"
+        )
+    if mentor.verification_status != "verified":
+        mentor.verification_status = "pending"
+        db.commit()
+        db.refresh(mentor)
+    return VerificationStatusPublic(
+        mentor_id=mentor.id,
+        status=mentor.verification_status,  # type: ignore[arg-type]
+    )
+
+
+@app.get(
+    "/mentors/{mentor_id}/availability",
+    response_model=list[AvailabilitySlotPublic],
+)
+def get_mentor_availability(
+    mentor_id: str, db: Session = Depends(get_db)
+) -> list[AvailabilitySlotPublic]:
+    find_mentor_by_id(mentor_id, db)
+    records = db.scalars(
+        select(MentorAvailabilityRecord)
+        .where(
+            MentorAvailabilityRecord.mentor_id == mentor_id,
+            MentorAvailabilityRecord.is_active.is_(True),
+        )
+        .order_by(
+            MentorAvailabilityRecord.day_of_week,
+            MentorAvailabilityRecord.start_time,
+        )
+    ).all()
+    return [availability_from_record(record) for record in records]
+
+
+@app.get(
+    "/mentors/{mentor_id}/verification",
+    response_model=VerificationStatusPublic,
+)
+def get_mentor_verification(
+    mentor_id: str, db: Session = Depends(get_db)
+) -> VerificationStatusPublic:
+    mentor = db.scalar(
+        select(UserRecord).where(
+            UserRecord.id == mentor_id, UserRecord.role == "mentor"
+        )
+    )
+    if mentor is None:
+        raise HTTPException(status_code=404, detail="Mentor not found")
+    return VerificationStatusPublic(
+        mentor_id=mentor.id,
+        status=mentor.verification_status,  # type: ignore[arg-type]
+    )
+
+
+@app.get(
+    "/mentors/{mentor_id}/reviews/eligibility",
+    response_model=ReviewEligibility,
+)
+def get_review_eligibility(
+    mentor_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ReviewEligibility:
+    user = get_user_from_token(authorization, db)
+    return review_eligibility_for(user, mentor_id, db)
+
+
+@app.get("/mentors/{mentor_id}/reviews", response_model=list[ReviewPublic])
+def list_mentor_reviews(
+    mentor_id: str, db: Session = Depends(get_db)
+) -> list[ReviewPublic]:
+    mentor = db.scalar(
+        select(UserRecord.id).where(
+            UserRecord.id == mentor_id, UserRecord.role == "mentor"
+        )
+    )
+    if mentor is None:
+        raise HTTPException(status_code=404, detail="Mentor not found")
+    rows = db.execute(
+        select(ReviewRecord, UserRecord.name)
+        .join(UserRecord, UserRecord.id == ReviewRecord.student_id)
+        .where(ReviewRecord.mentor_id == mentor_id)
+        .order_by(ReviewRecord.created_at.desc())
+    ).all()
+    return [review_from_record(record, student_name) for record, student_name in rows]
+
+
+@app.post(
+    "/mentors/{mentor_id}/reviews",
+    response_model=ReviewPublic,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_mentor_review(
+    mentor_id: str,
+    payload: ReviewCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ReviewPublic:
+    student = get_user_from_token(authorization, db)
+    eligibility = review_eligibility_for(student, mentor_id, db)
+    if not eligibility.can_review:
+        error_status = 409 if eligibility.existing_review else 403
+        raise HTTPException(status_code=error_status, detail=eligibility.reason)
+    if eligibility.connection_id is None:
+        raise HTTPException(status_code=403, detail="Review is not authorized")
+
+    review = ReviewRecord(
+        id=f"r_{uuid4().hex[:10]}",
+        connection_id=eligibility.connection_id,
+        student_id=student.id,
+        mentor_id=mentor_id,
+        rating=payload.rating,
+        comment=payload.comment.strip(),
+    )
+    db.add(review)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A review has already been submitted for this connection",
+        ) from exc
+    db.refresh(review)
+    return review_from_record(review, student.name)
+
+
+@app.patch("/reviews/{review_id}", response_model=ReviewPublic)
+def update_mentor_review(
+    review_id: str,
+    payload: ReviewCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ReviewPublic:
+    student = get_user_from_token(authorization, db)
+    review = db.get(ReviewRecord, review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if student.role != "student" or review.student_id != student.id:
+        raise HTTPException(
+            status_code=403, detail="Only the student who wrote this review can edit it"
+        )
+    review.rating = payload.rating
+    review.comment = payload.comment.strip()
+    review.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(review)
+    return review_from_record(review, student.name)
 
 
 @app.post("/recommendations", response_model=list[Mentor])

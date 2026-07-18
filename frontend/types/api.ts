@@ -5,6 +5,40 @@ export type MentorType =
   | "professor"
   | "nus_staff"
   | "other";
+export type VerificationStatus =
+  | "not_applicable"
+  | "unverified"
+  | "pending"
+  | "verified"
+  | "rejected";
+export type Weekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+export type AvailabilityMode = "online" | "in_person" | "hybrid";
+
+export type AvailabilitySlotInput = {
+  day_of_week: Weekday;
+  start_time: string;
+  end_time: string;
+  timezone?: string;
+  mode?: AvailabilityMode;
+  location?: string;
+};
+
+export type AvailabilitySlot = AvailabilitySlotInput & {
+  id: string;
+  mentor_id: string;
+  timezone: string;
+  mode: AvailabilityMode;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
 
 export type User = {
   id: string;
@@ -34,6 +68,7 @@ export type User = {
   office_location?: string;
   office?: string;
   profile_picture?: string;
+  verification_status: VerificationStatus;
 };
 
 export type Mentor = {
@@ -60,6 +95,28 @@ export type Mentor = {
   bio: string;
   experience: string[];
   match_reasons: string[];
+  verification_status: VerificationStatus;
+  availability: AvailabilitySlot[];
+};
+
+export type Review = {
+  id: string;
+  connection_id: string;
+  student_id: string;
+  student_name: string;
+  mentor_id: string;
+  rating: number;
+  comment: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ReviewEligibility = {
+  mentor_id: string;
+  can_review: boolean;
+  reason: string;
+  connection_id?: string;
+  existing_review?: Review;
 };
 
 export type Answer = {

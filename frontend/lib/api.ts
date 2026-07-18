@@ -1,15 +1,23 @@
 import type {
+  AvailabilitySlot,
+  AvailabilitySlotInput,
   Connection,
   Conversation,
   Mentor,
   ProfileSyncPayload,
   Question,
+  Review,
+  ReviewEligibility,
   UpdateProfilePayload,
   User,
+  VerificationStatus,
 } from "@/types/api";
 
 export type {
   Answer,
+  AvailabilityMode,
+  AvailabilitySlot,
+  AvailabilitySlotInput,
   AuthenticatedSession,
   Connection,
   Conversation,
@@ -19,9 +27,13 @@ export type {
   ProfileSyncPayload,
   Question,
   RegisterPayload,
+  Review,
+  ReviewEligibility,
   Role,
   UpdateProfilePayload,
   User,
+  VerificationStatus,
+  Weekday,
 } from "@/types/api";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -182,6 +194,80 @@ export function acceptConnection(token: string, connectionId: string) {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+  });
+}
+
+export function replaceMentorAvailability(
+  token: string,
+  slots: AvailabilitySlotInput[],
+) {
+  return request<AvailabilitySlot[]>("/mentors/me/availability", {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ slots }),
+  });
+}
+
+export function fetchMentorAvailability(mentorId: string) {
+  return request<AvailabilitySlot[]>(`/mentors/${mentorId}/availability`);
+}
+
+export function requestMentorVerification(token: string) {
+  return request<{ mentor_id: string; status: VerificationStatus }>(
+    "/mentors/me/verification",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+}
+
+export function fetchMentorReviews(mentorId: string) {
+  return request<Review[]>(`/mentors/${mentorId}/reviews`);
+}
+
+export function fetchReviewEligibility(token: string, mentorId: string) {
+  return request<ReviewEligibility>(
+    `/mentors/${mentorId}/reviews/eligibility`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+}
+
+export function createMentorReview(
+  token: string,
+  mentorId: string,
+  rating: number,
+  comment: string,
+) {
+  return request<Review>(`/mentors/${mentorId}/reviews`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ rating, comment }),
+  });
+}
+
+export function updateMentorReview(
+  token: string,
+  reviewId: string,
+  rating: number,
+  comment: string,
+) {
+  return request<Review>(`/reviews/${reviewId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ rating, comment }),
   });
 }
 

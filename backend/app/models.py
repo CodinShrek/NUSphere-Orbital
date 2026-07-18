@@ -1,8 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Time,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -50,6 +61,9 @@ class UserRecord(Base):
     office_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     office: Mapped[str | None] = mapped_column(String(255), nullable=True)
     profile_picture: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="not_applicable", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -124,6 +138,66 @@ class ConnectionRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False, index=True)
 
 
+class MentorAvailabilityRecord(Base):
+    __tablename__ = "mentor_availability"
+    __table_args__ = (
+        UniqueConstraint(
+            "mentor_id",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            name="uq_mentor_availability_slot",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mentor_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    day_of_week: Mapped[str] = mapped_column(String(9), nullable=False, index=True)
+    start_time: Mapped[time] = mapped_column(Time(), nullable=False)
+    end_time: Mapped[time] = mapped_column(Time(), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Singapore")
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="online")
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    mentor: Mapped[UserRecord] = relationship()
+
+
+class ReviewRecord(Base):
+    __tablename__ = "reviews"
+    __table_args__ = (
+        CheckConstraint("rating >= 1 AND rating <= 5", name="ck_reviews_rating_range"),
+        UniqueConstraint("connection_id", name="uq_reviews_connection_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    student_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mentor_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    connection: Mapped[ConnectionRecord] = relationship()
+    student: Mapped[UserRecord] = relationship(foreign_keys=[student_id])
+    mentor: Mapped[UserRecord] = relationship(foreign_keys=[mentor_id])
+
+
 class MessageRecord(Base):
     __tablename__ = "messages"
 
@@ -158,4 +232,10 @@ Index("ix_conversations_student_updated", ConversationRecord.student_id, Convers
 Index("ix_conversations_mentor_updated", ConversationRecord.mentor_id, ConversationRecord.updated_at)
 Index("ix_connections_student_status", ConnectionRecord.student_id, ConnectionRecord.status)
 Index("ix_connections_mentor_status", ConnectionRecord.mentor_id, ConnectionRecord.status)
+Index(
+    "ix_mentor_availability_mentor_day",
+    MentorAvailabilityRecord.mentor_id,
+    MentorAvailabilityRecord.day_of_week,
+)
+Index("ix_reviews_mentor_created", ReviewRecord.mentor_id, ReviewRecord.created_at)
 Index("ix_profile_embeddings_user_type", ProfileEmbeddingRecord.user_id, ProfileEmbeddingRecord.embedding_type)
