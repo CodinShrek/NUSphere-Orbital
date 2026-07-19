@@ -48,9 +48,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const error = (await response.json().catch(() => null)) as {
-      detail?: string;
+      detail?: string | { msg?: string }[];
     } | null;
-    throw new Error(error?.detail ?? "Request failed");
+    const detail = Array.isArray(error?.detail)
+      ? error.detail.map((item) => item.msg).filter(Boolean).join("; ")
+      : error?.detail;
+    throw new Error(detail || "Request failed");
   }
 
   return response.json() as Promise<T>;

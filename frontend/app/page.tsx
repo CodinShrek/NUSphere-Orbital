@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Search, Star, Zap } from "lucide-react";
+import { Bot, Search, Zap } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppShell } from "@/components/layout/AppShell";
+import {
+  AvailabilityEditor,
+  AvailabilityList,
+  MentorReviewSection,
+  RatingStars,
+  VerificationBadge,
+  VerificationControls,
+} from "@/components/mentors/MentorQuality";
 import { OptionDatalist, TextAreaInput, TextInput } from "@/components/ui/FormControls";
 import {
   accommodationOptions,
@@ -35,7 +43,17 @@ import {
 import { authenticateSession, signOut } from "@/lib/auth";
 import { splitList } from "@/lib/profile-utils";
 import { getSupabaseClient } from "@/lib/supabase";
-import type { AuthenticatedSession, Connection, Conversation, Mentor, MentorType, Question, User } from "@/types/api";
+import type {
+  AuthenticatedSession,
+  AvailabilitySlot,
+  Connection,
+  Conversation,
+  Mentor,
+  MentorType,
+  Question,
+  User,
+  VerificationStatus,
+} from "@/types/api";
 import type { View } from "@/types/navigation";
 
 export default function Home() {
@@ -258,6 +276,41 @@ export default function Home() {
     }
   }
 
+  function handleAvailabilityChange(
+    mentorId: string,
+    availability: AvailabilitySlot[],
+  ) {
+    setMentors((current) =>
+      current.map((mentor) =>
+        mentor.id === mentorId ? { ...mentor, availability } : mentor,
+      ),
+    );
+  }
+
+  function handleVerificationChange(status: VerificationStatus) {
+    setUser((current) => (current ? { ...current, verification_status: status } : current));
+    setMentors((current) =>
+      current.map((mentor) =>
+        mentor.id === user?.id
+          ? { ...mentor, verification_status: status }
+          : mentor,
+      ),
+    );
+  }
+
+  async function refreshMentorData() {
+    if (!user) return;
+    try {
+      setMentors(await fetchRecommendations(user));
+    } catch (refreshError) {
+      setError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Unable to refresh mentor information",
+      );
+    }
+  }
+
   function handleOpenMentorProfile(mentorId: string) {
     setSelectedMentorId(mentorId);
     setActiveView("mentor-profile");
@@ -286,8 +339,8 @@ export default function Home() {
       {activeView === "find" && <FindMentors mentors={mentors} connections={connections} token={token} user={user} onOpenMentorProfile={handleOpenMentorProfile} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
       {activeView === "qa" && <QAPlatform user={user} questions={questions} onCreateQuestion={handleCreateQuestion} onAnswerQuestion={handleAnswerQuestion} />}
       {activeView === "messages" && <Messages user={user} connections={connections} conversations={conversations} activeConversationId={activeConversationId} setActiveConversationId={setActiveConversationId} onAcceptConnection={handleAcceptConnection} onSendMessage={handleSendMessage} setActiveView={setActiveView} />}
-      {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} setActiveView={setActiveView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
-      {activeView === "my-profile" && <UserProfile user={user} setActiveView={setActiveView} onSaveProfile={handleSaveProfile} />}
+      {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} token={token} user={user} setActiveView={setActiveView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} onReviewsChange={refreshMentorData} />}
+      {activeView === "my-profile" && <UserProfile user={user} token={token} setActiveView={setActiveView} onSaveProfile={handleSaveProfile} onAvailabilityChange={handleAvailabilityChange} onVerificationChange={handleVerificationChange} />}
     </AppShell>
   );
 }
@@ -711,7 +764,24 @@ function FindMentors({
   );
 }
 
-function UserProfile({ user, setActiveView, onSaveProfile }: { user: User; setActiveView: (view: View) => void; onSaveProfile: (payload: Parameters<typeof updateProfile>[1]) => Promise<void> }) {
+function UserProfile({
+  user,
+  token,
+  setActiveView,
+  onSaveProfile,
+  onAvailabilityChange,
+  onVerificationChange,
+}: {
+  user: User;
+  token: string;
+  setActiveView: (view: View) => void;
+  onSaveProfile: (payload: Parameters<typeof updateProfile>[1]) => Promise<void>;
+  onAvailabilityChange: (
+    mentorId: string,
+    slots: AvailabilitySlot[],
+  ) => void;
+  onVerificationChange: (status: VerificationStatus) => void;
+}) {
   const completion = profileCompletion(user);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -801,6 +871,12 @@ function UserProfile({ user, setActiveView, onSaveProfile }: { user: User; setAc
               <p className="mt-1 text-white/85">{user.email} - {user.faculty} - {user.major} - {user.role}</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <span className="chip bg-white/16 text-white ring-1 ring-white/25">{user.role === "student" ? "Student" : "Mentor"}</span>
+                {user.role === "mentor" && (
+                  <VerificationBadge
+                    status={user.verification_status}
+                    onDark
+                  />
+                )}
                 {user.interests.slice(0, 2).map((interest) => (
                   <span key={interest} className="chip bg-white/16 text-white ring-1 ring-white/25">{interest}</span>
                 ))}
@@ -945,17 +1021,26 @@ function UserProfile({ user, setActiveView, onSaveProfile }: { user: User; setAc
                 </div>
               </Panel>
               {user.role === "mentor" && (
-                <Panel title="Mentor Details">
-                  <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-                    {user.graduation_year && <ProfileField label="Graduation year" value={user.graduation_year} />}
-                    {user.current_role && <ProfileField label="Current role" value={user.current_role} />}
-                    {user.organisation && <ProfileField label="Organisation" value={user.organisation} />}
-                    {user.department && <ProfileField label="Department / team" value={user.department} />}
-                    {user.consultation_hours && <ProfileField label="Consultation hours" value={user.consultation_hours} />}
-                    {user.office_location && <ProfileField label="Office / cubicle" value={user.office_location} />}
-                    {user.office && <ProfileField label="Office / unit" value={user.office} />}
-                  </div>
-                </Panel>
+                <>
+                  <Panel title="Mentor Details">
+                    <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                      {user.graduation_year && <ProfileField label="Graduation year" value={user.graduation_year} />}
+                      {user.current_role && <ProfileField label="Current role" value={user.current_role} />}
+                      {user.organisation && <ProfileField label="Organisation" value={user.organisation} />}
+                      {user.department && <ProfileField label="Department / team" value={user.department} />}
+                      {user.consultation_hours && <ProfileField label="Legacy consultation hours" value={user.consultation_hours} />}
+                      {user.office_location && <ProfileField label="Office / cubicle" value={user.office_location} />}
+                      {user.office && <ProfileField label="Office / unit" value={user.office} />}
+                    </div>
+                  </Panel>
+                  <AvailabilityEditor
+                    mentorId={user.id}
+                    token={token}
+                    onAvailabilityChange={(slots) =>
+                      onAvailabilityChange(user.id, slots)
+                    }
+                  />
+                </>
               )}
               <Panel title="About">
                 <div className="dash-placeholder p-4 font-medium text-[#596173]">{user.bio || "No description added yet."}</div>
@@ -977,6 +1062,13 @@ function UserProfile({ user, setActiveView, onSaveProfile }: { user: User; setAc
           )}
         </div>
         <aside className="space-y-6">
+          {user.role === "mentor" && (
+            <VerificationControls
+              status={user.verification_status}
+              token={token}
+              onStatusChange={onVerificationChange}
+            />
+          )}
           <Panel title="INTERESTS">
             <div className="flex flex-wrap gap-2">
               {user.interests.map((interest, index) => (
@@ -1268,7 +1360,25 @@ function ProfileList({ label, values }: { label: string; values: string[] }) {
   );
 }
 
-function MentorProfile({ mentor, connection, setActiveView, onRequestConnection, onStartConversation }: { mentor?: Mentor; connection?: Connection; setActiveView: (view: View) => void; onRequestConnection: (mentorId: string) => void; onStartConversation: (mentorId: string) => void }) {
+function MentorProfile({
+  mentor,
+  connection,
+  token,
+  user,
+  setActiveView,
+  onRequestConnection,
+  onStartConversation,
+  onReviewsChange,
+}: {
+  mentor?: Mentor;
+  connection?: Connection;
+  token: string;
+  user: User;
+  setActiveView: (view: View) => void;
+  onRequestConnection: (mentorId: string) => void;
+  onStartConversation: (mentorId: string) => void;
+  onReviewsChange: () => Promise<void>;
+}) {
   const selected = mentor ?? null;
   if (!selected) return null;
   return (
@@ -1282,6 +1392,10 @@ function MentorProfile({ mentor, connection, setActiveView, onRequestConnection,
               <p className="mt-1 text-white/85">{selected.mentor_type_label} - {selected.programme} - {selected.faculty} - NUS</p>
               <p className="mt-1 font-bold text-white">{selected.email}</p>
               <div className="mt-4 flex flex-wrap gap-2">
+                <VerificationBadge
+                  status={selected.verification_status}
+                  onDark
+                />
                 {[selected.mentor_type_label, ...selected.interests.slice(0, 2)].map((tag) => (
                   <span key={tag} className="chip bg-white/16 text-white ring-1 ring-white/25">{tag}</span>
                 ))}
@@ -1305,6 +1419,9 @@ function MentorProfile({ mentor, connection, setActiveView, onRequestConnection,
           <Panel title="About">
             <div className="dash-placeholder p-5 font-medium text-[#737b8f]">{selected.bio}</div>
           </Panel>
+          <Panel title="Availability">
+            <AvailabilityList slots={selected.availability} />
+          </Panel>
           <Panel title="Experience">
             <div className="space-y-5">
               {selected.experience.map((item, index) => (
@@ -1319,25 +1436,30 @@ function MentorProfile({ mentor, connection, setActiveView, onRequestConnection,
               ))}
             </div>
           </Panel>
+          <MentorReviewSection
+            mentorId={selected.id}
+            token={token}
+            isStudent={user.role === "student"}
+            onReviewsChange={onReviewsChange}
+          />
         </div>
         <aside className="space-y-6">
+          <Panel title="VERIFICATION">
+            <VerificationBadge status={selected.verification_status} />
+            <p className="mt-3 text-sm font-medium text-[#737b8f]">
+              {selected.verification_status === "verified"
+                ? "NUSphere has marked this mentor profile as verified."
+                : selected.verification_status === "pending"
+                  ? "This mentor has submitted a verification request."
+                  : "This mentor profile has not been verified yet."}
+            </p>
+          </Panel>
           <Panel title="CAN MENTOR ON">
             <div className="flex flex-wrap gap-2">
               {selected.interests.concat(selected.experience_tags.slice(0, 3)).map((tag, index) => (
                 <span key={tag} className={`chip ${pastel[index % pastel.length]}`}>{tag}</span>
               ))}
             </div>
-          </Panel>
-          <Panel title="RECENT REVIEWS">
-            {[1, 2].map((item) => (
-              <div className="border-b border-[#eef1f7] py-3 last:border-b-0" key={item}>
-                <div className="flex text-nusOrange">
-                  {Array.from({ length: 5 }).map((_, index) => <Star key={index} size={15} fill="currentColor" />)}
-                </div>
-                <p className="mt-2 font-medium text-[#596173]">Review placeholder text.</p>
-                <p className="text-sm text-[#a0a6b8]">Reviewer type</p>
-              </div>
-            ))}
           </Panel>
           <button className="h-12 w-full rounded-xl border border-[#a7bdf5] bg-white font-bold text-nusPurple" onClick={() => setActiveView("find")}>Back to mentors</button>
         </aside>
@@ -1379,6 +1501,9 @@ function CompactMentor({ mentor, onProfile, onConnect }: { mentor: Mentor; onPro
         <p className="text-xl font-black">{mentor.name}</p>
         <p className="font-medium text-[#737b8f]">{mentor.mentor_type_label} - {mentor.programme} - {mentor.faculty}</p>
         <p className="mt-1 text-sm font-bold text-nusPurple">{mentor.email}</p>
+        <div className="mt-2">
+          <VerificationBadge status={mentor.verification_status} />
+        </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {mentor.interests.slice(0, 3).map((tag, index) => <span key={tag} className={`chip ${pastel[index]}`}>{tag}</span>)}
         </div>
@@ -1394,7 +1519,6 @@ function CompactMentor({ mentor, onProfile, onConnect }: { mentor: Mentor; onPro
 }
 
 function MentorCard({ mentor, connection, onProfile, onConnect, onMessage }: { mentor: Mentor; connection?: Connection; onProfile: () => void; onConnect: () => void; onMessage: () => void }) {
-  const stars = useMemo(() => Array.from({ length: 5 }), []);
   return (
     <article className="card p-6">
       <div className="flex items-start gap-5">
@@ -1405,6 +1529,9 @@ function MentorCard({ mentor, connection, onProfile, onConnect, onMessage }: { m
               <h3 className="text-2xl font-black">{mentor.name}</h3>
               <p className="font-medium text-[#737b8f]">{mentor.mentor_type_label} - {mentor.programme} - {mentor.faculty}</p>
               <p className="mt-1 text-sm font-bold text-nusPurple">{mentor.email}</p>
+              <div className="mt-2">
+                <VerificationBadge status={mentor.verification_status} />
+              </div>
             </div>
             <Score score={mentor.match_score} label={mentor.match_label} />
           </div>
@@ -1413,9 +1540,13 @@ function MentorCard({ mentor, connection, onProfile, onConnect, onMessage }: { m
             {mentor.profile_match_score !== undefined ? <Score score={mentor.profile_match_score} label="Complete profile match" compact /> : <span className="chip bg-[#f1f4f9] text-[#596173]">Complete profile match calculating</span>}
             {mentor.goal_match_score !== undefined && <Score score={mentor.goal_match_score} label="Goal match" compact />}
           </div>
-          <div className="mt-3 flex items-center gap-1 text-nusOrange">
-            {stars.map((_, index) => <Star key={index} size={16} fill="currentColor" />)}
-            <span className="ml-2 font-medium text-[#737b8f]">( rating / review placeholder )</span>
+          <div className="mt-3 flex items-center gap-2">
+            <RatingStars rating={mentor.rating} />
+            <span className="font-medium text-[#737b8f]">
+              {mentor.reviews
+                ? `${mentor.rating.toFixed(1)} (${mentor.reviews} ${mentor.reviews === 1 ? "review" : "reviews"})`
+                : "No reviews yet"}
+            </span>
           </div>
           <div className="dash-placeholder mt-4 p-4 font-medium text-[#737b8f]">{mentor.bio}</div>
           <div className="mt-4 rounded-xl border border-[#d4dae8] bg-[#f8faff] p-4">
