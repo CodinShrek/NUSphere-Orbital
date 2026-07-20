@@ -183,7 +183,7 @@ def require_openai_embeddings() -> None:
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("OPENAI_API_KEY is not set in this PowerShell session.")
     _vector, model = embed_text("OpenAI embedding readiness check for NUSphere test profile seeding.")
-    if model == "local-hashing-v1":
+    if model.startswith("local-hashing"):
         raise SystemExit("OpenAI embeddings were not used. Check your OPENAI_API_KEY and network access.")
     print(f"Embedding provider ready: {model}")
 
@@ -206,7 +206,7 @@ def cleanup_profiles(db, delete_all_local_users: bool) -> list[str]:
         local_users = db.scalars(
             select(UserRecord)
             .join(ProfileEmbeddingRecord, ProfileEmbeddingRecord.user_id == UserRecord.id)
-            .where(ProfileEmbeddingRecord.model == "local-hashing-v1")
+            .where(ProfileEmbeddingRecord.model.like("local-hashing%"))
         ).all()
         users = list({user.id: user for user in [*users, *local_users]}.values())
 

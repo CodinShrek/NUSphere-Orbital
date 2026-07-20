@@ -63,7 +63,7 @@ Planned production services:
 - Supabase PostgreSQL or Railway PostgreSQL for persistent storage
 - Supabase Auth
 - Supabase Realtime for future messaging
-- OpenAI embeddings for richer mentor recommendations
+- OpenAI embeddings with deterministic local fallback for mentor recommendations
 - OpenRouter for the future AI assistant
 
 ## Project Structure
@@ -130,9 +130,26 @@ FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 DATABASE_URL=sqlite:///./nusphere.db
 SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 SUPABASE_JWT_AUDIENCE=authenticated
+OPENAI_API_KEY=
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_EMBEDDING_DIMENSIONS=256
+OPENAI_EMBEDDING_FALLBACK_ON_ERROR=true
+MATCH_WEIGHT_SEMANTIC=0.55
+MATCH_WEIGHT_STRUCTURED=0.25
+MATCH_WEIGHT_FACULTY=0.10
+MATCH_WEIGHT_COMPLETENESS=0.10
 ```
 
 For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway backend URL, `FRONTEND_ORIGINS` should include the Vercel frontend URL, `DATABASE_URL` should point to the managed PostgreSQL database connection string, and `SUPABASE_URL` should identify the Supabase project that issues access tokens.
+
+`OPENAI_API_KEY` is optional for local development. When it is present, the backend requests `text-embedding-3-small` vectors from OpenAI and stores the configured model and dimensions with each cached profile embedding. When it is absent, matching uses a deterministic local vector fallback. The four `MATCH_WEIGHT_*` values must be non-negative and add up to `1.0`. Set `OPENAI_EMBEDDING_FALLBACK_ON_ERROR=false` when an OpenAI provider failure should stop an AI match instead of temporarily using the local fallback.
+
+After adding a private API key to `backend/.env`, verify the real provider without changing application data:
+
+```powershell
+cd backend
+python scripts/check_openai_embeddings.py
+```
 
 ## Authentication
 
@@ -168,8 +185,8 @@ alembic upgrade head
 ## Current Limitations
 
 This is still an MVP-stage system.
-- Mentor recommendation logic is currently rule-based rather than embedding-based.
-- Ratings and the AI assistant are still future features.
+- Mentor matching combines OpenAI semantic similarity, structured profile overlap, faculty alignment, and profile completeness. Without an OpenAI key it uses a deterministic local embedding fallback.
+- The broader AI assistant is still a future feature.
 
 ## Next Steps
 

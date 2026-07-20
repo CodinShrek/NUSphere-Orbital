@@ -14,7 +14,18 @@ from sqlalchemy.orm import Session, joinedload
 
 from .auth import claims_from_authorization
 from .database import get_db
-from .ai_matching import cosine_similarity, embed_text, goal_search_text, match_explanation, profile_completeness, structured_overlap, user_profile_text
+from .ai_matching import (
+    cosine_similarity,
+    embed_text,
+    expected_embedding_model,
+    goal_search_text,
+    match_explanation,
+    matching_weights,
+    profile_completeness,
+    structured_overlap,
+    user_profile_text,
+    weighted_match_score,
+)
 from .models import (
     AnswerRecord,
     ConnectionRecord,
@@ -873,27 +884,84 @@ def upsert_profile_embedding(user: UserRecord, db: Session) -> ProfileEmbeddingR
 
 def ensure_profile_embedding(user: UserRecord, db: Session) -> ProfileEmbeddingRecord:
     record = db.get(ProfileEmbeddingRecord, f"{user.id}_profile")
-    if record is None:
+    source_text = user_profile_text(
+        user,
+        perspective="mentor guidance" if user.role == "mentor" else "student goals",
+    )
+    if (
+        record is None
+        or record.source_text != source_text
+        or record.model != expected_embedding_model()
+    ):
         return upsert_profile_embedding(user, db)
     return record
 
 
-def ai_ranked_mentors(student: UserRecord, query_embedding: list[float], db: Session, mode: str, minimum_score: int = 0) -> list[Mentor]:
+def ai_ranked_mentors(
+    student: UserRecord,
+    query_embedding: list[float],
+    db: Session,
+    mode: str,
+    minimum_score: int = 0,
+    *,
+    query_model: str | None = None,
+    query_text: str | None = None,
+) -> list[Mentor]:
     mentors = db.scalars(select(UserRecord).where(UserRecord.role == "mentor")).all()
     mentor_profiles = {mentor.id: mentor for mentor in available_mentors(db)}
     keyword_request = recommendation_request_from_user(student)
     student_profile_embedding = ensure_profile_embedding(student, db)
+    active_query_model = query_model or student_profile_embedding.model
+    weights = matching_weights()
     ranked: list[Mentor] = []
     for mentor_user in mentors:
         embedding_record = ensure_profile_embedding(mentor_user, db)
-        semantic = max(0.0, cosine_similarity(query_embedding, embedding_record.embedding))
-        profile_semantic = max(0.0, cosine_similarity(student_profile_embedding.embedding, embedding_record.embedding))
+        semantic = (
+            max(0.0, cosine_similarity(query_embedding, embedding_record.embedding))
+            if active_query_model == embedding_record.model
+            else 0.0
+        )
+        profile_semantic = (
+            max(
+                0.0,
+                cosine_similarity(
+                    student_profile_embedding.embedding,
+                    embedding_record.embedding,
+                ),
+            )
+            if student_profile_embedding.model == embedding_record.model
+            else 0.0
+        )
         overlap = structured_overlap(student, mentor_user)
         completeness = profile_completeness(mentor_user)
         faculty_boost = 1.0 if student.faculty == mentor_user.faculty else 0.0
-        final_score = round((semantic * 0.7 + overlap * 0.15 + faculty_boost * 0.1 + completeness * 0.05) * 100)
+        final_score = round(
+            weighted_match_score(
+                semantic=semantic,
+                structured=overlap,
+                faculty=faculty_boost,
+                completeness=completeness,
+                weights=weights,
+            )
+            * 100
+        )
         bounded_score = max(0, min(99, final_score))
-        profile_score = max(0, min(99, round((profile_semantic * 0.7 + overlap * 0.15 + faculty_boost * 0.1 + completeness * 0.05) * 100)))
+        profile_score = max(
+            0,
+            min(
+                99,
+                round(
+                    weighted_match_score(
+                        semantic=profile_semantic,
+                        structured=overlap,
+                        faculty=faculty_boost,
+                        completeness=completeness,
+                        weights=weights,
+                    )
+                    * 100
+                ),
+            ),
+        )
         base_mentor = mentor_profiles[mentor_user.id]
         keyword_score = score_mentor(base_mentor, keyword_request)
         score_update = {
@@ -901,7 +969,14 @@ def ai_ranked_mentors(student: UserRecord, query_embedding: list[float], db: Ses
             "keyword_match_score": keyword_score,
             "profile_match_score": profile_score,
             "match_label": "Complete profile match" if mode == "profile" else "Goal match",
-            "match_reasons": match_explanation(student, mentor_user, mode, semantic, overlap),
+            "match_reasons": match_explanation(
+                student,
+                mentor_user,
+                mode,
+                semantic,
+                overlap,
+                query=query_text,
+            ),
         }
         if mode == "profile":
             score_update["profile_match_score"] = bounded_score
@@ -1267,7 +1342,13 @@ def ai_profile_match(authorization: str | None = Header(default=None), db: Sessi
     if student.role != "student":
         raise HTTPException(status_code=403, detail="Only students can request mentor matches")
     student_embedding = ensure_profile_embedding(student, db)
-    return ai_ranked_mentors(student, student_embedding.embedding, db, mode="profile")
+    return ai_ranked_mentors(
+        student,
+        student_embedding.embedding,
+        db,
+        mode="profile",
+        query_model=student_embedding.model,
+    )
 
 
 @app.post("/ai/goal-search", response_model=list[Mentor])
@@ -1275,8 +1356,16 @@ def ai_goal_search(payload: GoalSearchRequest, authorization: str | None = Heade
     student = get_user_from_token(authorization, db)
     if student.role != "student":
         raise HTTPException(status_code=403, detail="Only students can search for mentors")
-    embedding, _model = embed_text(goal_search_text(student, payload.query))
-    return ai_ranked_mentors(student, embedding, db, mode="goal", minimum_score=payload.minimum_score)
+    embedding, model = embed_text(goal_search_text(student, payload.query))
+    return ai_ranked_mentors(
+        student,
+        embedding,
+        db,
+        mode="goal",
+        minimum_score=payload.minimum_score,
+        query_model=model,
+        query_text=payload.query,
+    )
 
 
 @app.get("/connections", response_model=list[ConnectionPublic])

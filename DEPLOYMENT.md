@@ -57,14 +57,26 @@ SUPABASE_JWT_AUDIENCE=authenticated
 
 If using Supabase, copy the PostgreSQL connection string from the Supabase project database settings. If using Railway PostgreSQL, add a PostgreSQL service to the same Railway project and use its generated database URL.
 
-Optional variables reserved for future production integrations:
+OpenAI-backed mentor matching variables:
 
 ```text
 OPENAI_API_KEY=
-OPENROUTER_API_KEY=
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_EMBEDDING_DIMENSIONS=256
+OPENAI_EMBEDDING_FALLBACK_ON_ERROR=true
+MATCH_WEIGHT_SEMANTIC=0.55
+MATCH_WEIGHT_STRUCTURED=0.25
+MATCH_WEIGHT_FACULTY=0.10
+MATCH_WEIGHT_COMPLETENESS=0.10
 ```
 
-These can stay blank until the AI assistant integrations are connected.
+The four matching weights must add up to `1.0`. Keep `OPENAI_API_KEY` only in Railway or a private local `.env` file. With no key, the API remains functional using deterministic local embeddings. Set `OPENAI_EMBEDDING_FALLBACK_ON_ERROR=false` if production should reject AI matching requests whenever OpenAI is configured but unavailable.
+
+Optional variable reserved for the future AI assistant:
+
+```text
+OPENROUTER_API_KEY=
+```
 
 ## Vercel Frontend
 
