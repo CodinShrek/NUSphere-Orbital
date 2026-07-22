@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Search, Zap } from "lucide-react";
+import {
+  Bot,
+  BrainCircuit,
+  CircleAlert,
+  Database,
+  LoaderCircle,
+  Search,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/auth/AuthScreen";
@@ -542,6 +551,7 @@ function FindMentors({
   const [profileScoreMap, setProfileScoreMap] = useState<Record<string, number>>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [aiHasRun, setAiHasRun] = useState(false);
   const [activeFilter, setActiveFilter] = useState("All");
   const [selectedFaculties, setSelectedFaculties] = useState<string[]>([]);
   const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
@@ -616,6 +626,7 @@ function FindMentors({
 
   async function runAiProfileMatch() {
     if (!token || user.role !== "student") return;
+    setAiHasRun(true);
     setAiLoading(true);
     setAiError("");
     try {
@@ -629,6 +640,7 @@ function FindMentors({
 
   async function runAiGoalSearch() {
     if (!token || user.role !== "student") return;
+    setAiHasRun(true);
     setAiLoading(true);
     setAiError("");
     try {
@@ -643,6 +655,8 @@ function FindMentors({
   function switchAiMode(mode: "standard" | "profile" | "goal") {
     setAiMode(mode);
     setAiError("");
+    setAiHasRun(false);
+    setAiMentors([]);
     if (mode === "standard") return;
     setMinimumScore(0);
     if (user.role !== "student") {
@@ -651,6 +665,9 @@ function FindMentors({
     }
     if (mode === "profile") void runAiProfileMatch();
   }
+
+  const resultMetadata = aiMentors[0];
+  const retryAiRequest = aiMode === "profile" ? runAiProfileMatch : runAiGoalSearch;
 
   return (
     <section>
@@ -683,10 +700,43 @@ function FindMentors({
               Describe your goal and ideal mentor
               <textarea className="field mt-2 min-h-28 resize-y py-3" value={goalQuery} onChange={(event) => setGoalQuery(event.target.value)} placeholder="Describe what you want to achieve and what kind of experience you want in a mentor." />
             </label>
+            <p className={`mt-2 text-sm font-semibold ${goalQuery.trim().length < 20 ? "text-[#a65b00]" : "text-emerald-700"}`}>
+              {goalQuery.trim().length < 20
+                ? `${20 - goalQuery.trim().length} more characters needed for a useful match.`
+                : "Your goal is detailed enough to search."}
+            </p>
             <button className="mt-3 h-11 rounded-xl bg-nusPurple px-5 font-bold text-white disabled:opacity-60" onClick={runAiGoalSearch} disabled={aiLoading || user.role !== "student" || goalQuery.trim().length < 20}>{aiLoading ? "Searching..." : "Find AI matches"}</button>
           </div>
         )}
-        {aiError && <p className="mb-5 rounded-xl bg-[#fff1f0] px-4 py-3 text-sm font-bold text-[#c02b18]">{aiError}</p>}
+        {aiError && (
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-[#fff1f0] px-4 py-3" role="alert">
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 shrink-0 text-[#c02b18]" size={20} />
+              <div>
+                <p className="font-black text-[#8f2115]">We could not load AI matches</p>
+                <p className="mt-1 text-sm font-semibold text-[#a13b2e]">{aiError}</p>
+              </div>
+            </div>
+            <button className="rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-black text-[#8f2115]" onClick={() => void retryAiRequest()} disabled={aiLoading}>
+              Try again
+            </button>
+          </div>
+        )}
+        {aiMode !== "standard" && !aiLoading && !aiError && aiHasRun && resultMetadata && (
+          <div className={`mb-5 flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${resultMetadata.embedding_fallback ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`} aria-live="polite">
+            {resultMetadata.embedding_fallback ? <Database className="text-amber-700" size={20} /> : <Sparkles className="text-emerald-700" size={20} />}
+            <div>
+              <p className={`text-sm font-black ${resultMetadata.embedding_fallback ? "text-amber-900" : "text-emerald-900"}`}>
+                {resultMetadata.embedding_fallback ? "Local fallback matching" : "OpenAI semantic matching"}
+              </p>
+              <p className={`text-xs font-semibold ${resultMetadata.embedding_fallback ? "text-amber-800" : "text-emerald-800"}`}>
+                {resultMetadata.embedding_fallback
+                  ? `Model: ${formatEmbeddingModel(resultMetadata.embedding_model)}. OpenAI is not configured or was unavailable.`
+                  : `Embedding model: ${formatEmbeddingModel(resultMetadata.embedding_model)}`}
+              </p>
+            </div>
+          </div>
+        )}
         {aiMode === "standard" && (
           <>
             <div className="flex gap-4">
@@ -742,19 +792,31 @@ function FindMentors({
       <div className="p-8">
         <div className="mx-auto max-w-[1320px]">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-            <p className="font-medium text-[#737b8f]">Showing {displayedMentors.length} of {aiMode === "standard" ? mentors.length : aiMentors.length} mentors - sorted by {aiMode === "standard" ? "match score" : "AI fit"}</p>
+            <p className="font-medium text-[#737b8f]">
+              {aiLoading
+                ? "Analysing mentor profiles and calculating match evidence..."
+                : `Showing ${displayedMentors.length} of ${aiMode === "standard" ? mentors.length : aiMentors.length} mentors - sorted by ${aiMode === "standard" ? "match score" : "AI fit"}`}
+            </p>
             {(query || activeFilter !== "All" || selectedFaculties.length || selectedInterests.length || minimumScore !== 0) && (
               <button className="font-bold text-nusPurple" onClick={clearFilters}>Clear filters</button>
             )}
           </div>
           <div className="space-y-5">
-            {displayedMentors.map((mentor) => (
+            {aiMode !== "standard" && aiLoading && <MatchLoadingState mode={aiMode} />}
+            {!aiLoading && displayedMentors.map((mentor) => (
                 <MentorCard key={mentor.id} mentor={mentor} connection={connectionForMentor(mentor.id)} onProfile={() => onOpenMentorProfile(mentor.id)} onConnect={() => onRequestConnection(mentor.id)} onMessage={() => onStartConversation(mentor.id)} />
             ))}
-            {!displayedMentors.length && (
+            {aiMode === "goal" && !aiLoading && !aiError && !aiHasRun && (
+              <div className="card p-8 text-center">
+                <BrainCircuit className="mx-auto text-nusPurple" size={34} />
+                <p className="mt-3 text-xl font-black">Describe the guidance you need</p>
+                <p className="mt-2 font-medium text-[#737b8f]">Your results will include a transparent score breakdown and evidence from each mentor&apos;s profile.</p>
+              </div>
+            )}
+            {!aiLoading && !aiError && (aiMode === "standard" || aiHasRun) && !displayedMentors.length && (
               <div className="card p-8 text-center">
                 <p className="text-xl font-black">No mentors match these filters yet.</p>
-                <p className="mt-2 font-medium text-[#737b8f]">{aiMode === "standard" ? "Try a broader search term, lower the match score, or clear the selected filters." : "Run an AI match or lower the minimum score."}</p>
+                <p className="mt-2 font-medium text-[#737b8f]">{aiMode === "standard" ? "Try a broader search term, lower the match score, or clear the selected filters." : "Try describing a broader goal or complete more of your profile."}</p>
               </div>
             )}
           </div>
@@ -1549,12 +1611,7 @@ function MentorCard({ mentor, connection, onProfile, onConnect, onMessage }: { m
             </span>
           </div>
           <div className="dash-placeholder mt-4 p-4 font-medium text-[#737b8f]">{mentor.bio}</div>
-          <div className="mt-4 rounded-xl border border-[#d4dae8] bg-[#f8faff] p-4">
-            <p className="text-sm font-black uppercase text-[#9aa1b3]">Why this match</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {mentor.match_reasons.map((reason, index) => <span key={reason} className={`chip ${pastel[index % pastel.length]}`}>{reason}</span>)}
-            </div>
-          </div>
+          <MatchInsights mentor={mentor} />
           <div className="mt-4 flex flex-wrap gap-2">
             {mentor.interests.map((tag, index) => <span key={tag} className={`chip ${pastel[index % pastel.length]}`}>{tag}</span>)}
           </div>
@@ -1574,6 +1631,112 @@ function Avatar({ initials, large = false, src }: { initials: string; large?: bo
     <div className={`grid shrink-0 place-items-center overflow-hidden rounded-2xl bg-[#e5eaff] font-black text-nusPurple ${large ? "h-20 w-20 border-2 border-white/25 text-2xl" : "h-16 w-16 text-2xl"}`}>
       {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : initials}
     </div>
+  );
+}
+
+function formatEmbeddingModel(model?: string) {
+  if (!model) return "Unknown model";
+  const [name, dimensions] = model.split(":");
+  return dimensions ? `${name} (${dimensions} dimensions)` : name;
+}
+
+function MatchLoadingState({ mode }: { mode: "profile" | "goal" }) {
+  return (
+    <div className="card overflow-hidden" role="status" aria-live="polite">
+      <div className="flex items-center gap-3 border-b border-[#e1e5ef] bg-[#f8faff] px-6 py-4">
+        <LoaderCircle className="animate-spin text-nusPurple" size={22} />
+        <div>
+          <p className="font-black">{mode === "profile" ? "Comparing complete profiles" : "Finding mentors for your goal"}</p>
+          <p className="text-sm font-medium text-[#737b8f]">Generating embeddings, scoring mentor evidence, and preparing explanations.</p>
+        </div>
+      </div>
+      <div className="space-y-4 p-6">
+        {[0, 1].map((item) => (
+          <div key={item} className="animate-pulse rounded-2xl border border-[#e1e5ef] p-5">
+            <div className="flex gap-4">
+              <div className="h-14 w-14 rounded-2xl bg-[#e8ebf4]" />
+              <div className="flex-1 space-y-3">
+                <div className="h-5 w-1/3 rounded bg-[#e8ebf4]" />
+                <div className="h-4 w-1/2 rounded bg-[#eef0f6]" />
+                <div className="h-16 rounded-xl bg-[#f1f3f8]" />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <span className="sr-only">Loading mentor matches</span>
+    </div>
+  );
+}
+
+function MatchInsights({ mentor }: { mentor: Mentor }) {
+  const breakdown = mentor.match_score_breakdown;
+  const components = breakdown
+    ? [
+        ["Semantic similarity", breakdown.semantic, "Meaning and intent across the profiles"],
+        ["Structured overlap", breakdown.structured, "Shared interests, modules and experiences"],
+        ["Faculty alignment", breakdown.faculty, "Whether both profiles share a faculty"],
+        ["Profile completeness", breakdown.completeness, "Strength of the mentor profile evidence"],
+      ] as const
+    : [];
+
+  return (
+    <section className="mt-4 overflow-hidden rounded-2xl border border-[#d4dae8] bg-[#f8faff]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#dfe4ef] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <BrainCircuit className="text-nusPurple" size={19} />
+          <p className="text-sm font-black uppercase tracking-wide text-[#596173]">Why this match</p>
+        </div>
+        {mentor.embedding_provider && (
+          <span className={`chip text-xs ${mentor.embedding_fallback ? "bg-amber-100 text-amber-900" : "bg-emerald-100 text-emerald-800"}`} title={formatEmbeddingModel(mentor.embedding_model)}>
+            {mentor.embedding_fallback ? <Database size={13} /> : <Sparkles size={13} />}
+            {mentor.embedding_fallback ? "Local fallback" : "OpenAI embeddings"}
+          </span>
+        )}
+      </div>
+
+      {breakdown && (
+        <div className="border-b border-[#dfe4ef] p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="font-black">Score breakdown</p>
+              <p className="text-xs font-semibold text-[#737b8f]">Each signal is multiplied by its configured weight.</p>
+            </div>
+            <Score score={breakdown.total} label="Total AI fit" compact />
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {components.map(([label, component, description]) => (
+              <div key={label} className="rounded-xl border border-[#dfe4ef] bg-white p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-black">{label}</p>
+                  <p className="text-sm font-black text-nusPurple">{component.score}%</p>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#e9ecf4]">
+                  <div className="h-full rounded-full bg-nusPurple" style={{ width: `${component.score}%` }} />
+                </div>
+                <div className="mt-2 flex items-start justify-between gap-3 text-xs font-semibold text-[#737b8f]">
+                  <span>{description}</span>
+                  <span className="shrink-0">{component.weight}% weight · {component.weighted_points.toFixed(1)} pts</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-3 p-4 md:grid-cols-2">
+        {mentor.match_reasons.length ? mentor.match_reasons.map((reason, index) => (
+          <div key={`${reason}-${index}`} className="flex items-start gap-3 rounded-xl border border-[#dfe4ef] bg-white p-3">
+            <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${pastel[index % pastel.length]}`}>
+              <Zap size={14} fill="currentColor" />
+            </span>
+            <p className="text-sm font-semibold leading-5 text-[#4f5668]">{reason}</p>
+          </div>
+        )) : (
+          <p className="text-sm font-semibold text-[#737b8f]">No specific matching evidence is available yet.</p>
+        )}
+      </div>
+    </section>
   );
 }
 

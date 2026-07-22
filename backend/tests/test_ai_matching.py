@@ -23,7 +23,7 @@ from app.ai_matching import (
     weighted_match_score,
 )
 from app.database import Base
-from app.main import ensure_profile_embedding
+from app.main import ai_ranked_mentors, ensure_profile_embedding
 from app.models import ProfileEmbeddingRecord, UserRecord
 
 
@@ -290,6 +290,70 @@ class EmbeddingCacheTests(unittest.TestCase):
 
             self.assertIs(result, stale)
             upsert.assert_called_once_with(user, db)
+
+
+class MatchResponseMetadataTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(self.engine)
+
+    def tearDown(self) -> None:
+        self.engine.dispose()
+
+    @patch.dict(
+        os.environ,
+        {
+            "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small",
+            "OPENAI_EMBEDDING_DIMENSIONS": "12",
+        },
+        clear=True,
+    )
+    def test_ai_results_expose_breakdown_and_fallback_metadata(self) -> None:
+        with Session(self.engine) as db:
+            student = make_user(
+                "u_student",
+                "student",
+                interests=["Artificial Intelligence"],
+                goals=["Build a startup"],
+            )
+            mentor = make_user(
+                "u_mentor",
+                "mentor",
+                mentor_type="alumni",
+                interests=["Artificial Intelligence"],
+                areas_of_expertise=["Startup strategy"],
+                bio="Built an AI startup and mentors founders.",
+            )
+            db.add_all([student, mentor])
+            db.commit()
+            query_embedding, query_model = embed_text("Find an AI startup mentor")
+
+            result = ai_ranked_mentors(
+                student,
+                query_embedding,
+                db,
+                mode="goal",
+                query_model=query_model,
+                query_text="Find an AI startup mentor",
+            )
+
+            self.assertEqual(len(result), 1)
+            match = result[0]
+            self.assertEqual(match.embedding_provider, "local")
+            self.assertTrue(match.embedding_fallback)
+            self.assertEqual(match.embedding_model, "local-hashing-v2:12")
+            self.assertIsNotNone(match.match_score_breakdown)
+            breakdown = match.match_score_breakdown
+            assert breakdown is not None
+            self.assertEqual(breakdown.total, match.match_score)
+            self.assertEqual(breakdown.semantic.weight, 55)
+            self.assertEqual(breakdown.structured.weight, 25)
+            self.assertEqual(breakdown.faculty.weight, 10)
+            self.assertEqual(breakdown.completeness.weight, 10)
 
 
 if __name__ == "__main__":

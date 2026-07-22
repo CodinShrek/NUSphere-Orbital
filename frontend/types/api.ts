@@ -90,6 +90,10 @@ export type Mentor = {
   profile_match_score?: number;
   goal_match_score?: number;
   match_label: string;
+  match_score_breakdown?: MatchScoreBreakdown;
+  embedding_model?: string;
+  embedding_provider?: "openai" | "local";
+  embedding_fallback?: boolean;
   interests: string[];
   experience_tags: string[];
   bio: string;
@@ -97,6 +101,20 @@ export type Mentor = {
   match_reasons: string[];
   verification_status: VerificationStatus;
   availability: AvailabilitySlot[];
+};
+
+export type MatchScoreComponent = {
+  score: number;
+  weight: number;
+  weighted_points: number;
+};
+
+export type MatchScoreBreakdown = {
+  semantic: MatchScoreComponent;
+  structured: MatchScoreComponent;
+  faculty: MatchScoreComponent;
+  completeness: MatchScoreComponent;
+  total: number;
 };
 
 export type Review = {

@@ -41,8 +41,12 @@ from .models import (
 
 Role = Literal["student", "mentor"]
 MentorType = Literal["senior", "alumni", "professor", "nus_staff", "other"]
-VerificationStatus = Literal["not_applicable", "unverified", "pending", "verified", "rejected"]
-Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+VerificationStatus = Literal[
+    "not_applicable", "unverified", "pending", "verified", "rejected"
+]
+Weekday = Literal[
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+]
 AvailabilityMode = Literal["online", "in_person", "hybrid"]
 
 
@@ -201,6 +205,20 @@ class ReviewEligibility(BaseModel):
     existing_review: ReviewPublic | None = None
 
 
+class MatchScoreComponent(BaseModel):
+    score: int
+    weight: int
+    weighted_points: float
+
+
+class MatchScoreBreakdown(BaseModel):
+    semantic: MatchScoreComponent
+    structured: MatchScoreComponent
+    faculty: MatchScoreComponent
+    completeness: MatchScoreComponent
+    total: int
+
+
 class Mentor(BaseModel):
     id: str
     email: EmailStr
@@ -221,6 +239,10 @@ class Mentor(BaseModel):
     profile_match_score: int | None = None
     goal_match_score: int | None = None
     match_label: str = "Keyword match"
+    match_score_breakdown: MatchScoreBreakdown | None = None
+    embedding_model: str | None = None
+    embedding_provider: Literal["openai", "local"] | None = None
+    embedding_fallback: bool | None = None
     interests: list[str]
     experience_tags: list[str]
     bio: str
@@ -434,7 +456,9 @@ def connection_from_record(record: ConnectionRecord) -> ConnectionPublic:
     )
 
 
-def availability_from_record(record: MentorAvailabilityRecord) -> AvailabilitySlotPublic:
+def availability_from_record(
+    record: MentorAvailabilityRecord,
+) -> AvailabilitySlotPublic:
     return AvailabilitySlotPublic(
         id=record.id,
         mentor_id=record.mentor_id,
@@ -478,7 +502,11 @@ def get_user_from_token(authorization: str | None, db: Session) -> UserRecord:
 
 
 def normalise_keyword(value: str) -> str:
-    return " ".join("".join(character.lower() if character.isalnum() else " " for character in value).split())
+    return " ".join(
+        "".join(
+            character.lower() if character.isalnum() else " " for character in value
+        ).split()
+    )
 
 
 def singular_keyword(token: str) -> str:
@@ -504,9 +532,12 @@ def keyword_term_matches(term: str, candidate: str) -> bool:
         return normalised_term in candidate_parts
 
     if len(term_parts) > 1:
-        meaningful_parts = [singular_keyword(part) for part in term_parts if len(part) > 2]
+        meaningful_parts = [
+            singular_keyword(part) for part in term_parts if len(part) > 2
+        ]
         return normalised_term in normalised_candidate or (
-            bool(meaningful_parts) and all(part in candidate_tokens for part in meaningful_parts)
+            bool(meaningful_parts)
+            and all(part in candidate_tokens for part in meaningful_parts)
         )
 
     return singular_keyword(normalised_term) in candidate_tokens
@@ -531,14 +562,21 @@ def score_mentor(mentor: Mentor, request: RecommendationRequest) -> int:
     score = 35 + min(45, len(matched_terms) * 7)
     if request.faculty and request.faculty == mentor.faculty:
         score += 10
-    if matched_terms and any(keyword_term_matches(request.faculty or "", value) for value in [mentor.faculty, mentor.programme]):
+    if matched_terms and any(
+        keyword_term_matches(request.faculty or "", value)
+        for value in [mentor.faculty, mentor.programme]
+    ):
         score += 4
     return min(99, score)
 
 
 def match_reasons(mentor: Mentor, request: RecommendationRequest) -> list[str]:
     profile_terms = [term for term in request.interests + request.goals if term]
-    mentor_terms = mentor.interests + mentor.experience_tags + [mentor.programme, mentor.faculty, mentor.bio, *mentor.experience]
+    mentor_terms = (
+        mentor.interests
+        + mentor.experience_tags
+        + [mentor.programme, mentor.faculty, mentor.bio, *mentor.experience]
+    )
     reasons = []
     seen_terms = set()
     for term in profile_terms:
@@ -551,7 +589,9 @@ def match_reasons(mentor: Mentor, request: RecommendationRequest) -> list[str]:
     if request.faculty and request.faculty == mentor.faculty:
         reasons.append(f"Same faculty: {mentor.faculty}")
     if not reasons:
-        reasons.append("Limited direct keyword overlap; compare profile details before connecting")
+        reasons.append(
+            "Limited direct keyword overlap; compare profile details before connecting"
+        )
     return reasons[:3]
 
 
@@ -610,7 +650,9 @@ def extract_key_terms(*parts: str, existing: list[str] | None = None) -> list[st
             terms.append(cleaned)
 
     for part in parts:
-        words = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in part).split()
+        words = "".join(
+            ch if ch.isalnum() or ch.isspace() else " " for ch in part
+        ).split()
         for word in words:
             cleaned = word.strip()
             if len(cleaned) < 3 or cleaned.lower() in stop_words:
@@ -664,14 +706,34 @@ def mentor_from_user(
             f"Department: {user.department}" if user.department else "",
             f"Current role: {user.current_role}" if user.current_role else "",
             f"Organisation: {user.organisation}" if user.organisation else "",
-            f"Modules taught: {', '.join(user.modules_taught)}" if user.modules_taught else "",
-            f"Consultation hours: {user.consultation_hours}" if user.consultation_hours else "",
+            (
+                f"Modules taught: {', '.join(user.modules_taught)}"
+                if user.modules_taught
+                else ""
+            ),
+            (
+                f"Consultation hours: {user.consultation_hours}"
+                if user.consultation_hours
+                else ""
+            ),
             f"Office / cubicle: {user.office_location}" if user.office_location else "",
             f"Office: {user.office}" if user.office else "",
-            f"Areas of expertise: {', '.join(user.areas_of_expertise)}" if user.areas_of_expertise else "",
-            f"NUS opportunities: {', '.join(user.nus_opportunities)}" if user.nus_opportunities else "",
+            (
+                f"Areas of expertise: {', '.join(user.areas_of_expertise)}"
+                if user.areas_of_expertise
+                else ""
+            ),
+            (
+                f"NUS opportunities: {', '.join(user.nus_opportunities)}"
+                if user.nus_opportunities
+                else ""
+            ),
             f"CCAs: {', '.join(user.ccas)}" if user.ccas else "",
-            f"Exchange interests: {', '.join(user.exchange_universities)}" if user.exchange_universities else "",
+            (
+                f"Exchange interests: {', '.join(user.exchange_universities)}"
+                if user.exchange_universities
+                else ""
+            ),
             user.mentorship_goals or "",
         ]
         if item
@@ -683,7 +745,11 @@ def mentor_from_user(
         mentor_type=user.mentor_type,
         mentor_type_label=mentor_type_label,
         year=mentor_type_label,
-        programme=user.department or user.major or user.current_role or user.office or mentor_type_label,
+        programme=user.department
+        or user.major
+        or user.current_role
+        or user.office
+        or mentor_type_label,
         faculty=user.faculty,
         department=user.department,
         role=mentor_type_label,
@@ -695,7 +761,9 @@ def mentor_from_user(
         keyword_match_score=72,
         interests=user.areas_of_expertise or user.interests or user.goals,
         experience_tags=experience_tags,
-        bio=user.bio or user.mentorship_goals or "This mentor has not added a description yet.",
+        bio=user.bio
+        or user.mentorship_goals
+        or "This mentor has not added a description yet.",
         experience=experience or ["Mentor profile created during sign up"],
         verification_status=user.verification_status,  # type: ignore[arg-type]
         availability=availability or [],
@@ -705,8 +773,9 @@ def mentor_from_user(
 def available_mentors(db: Session) -> list[Mentor]:
     answer_counts = dict(
         db.execute(
-            select(AnswerRecord.mentor_id, func.count(AnswerRecord.id))
-            .group_by(AnswerRecord.mentor_id)
+            select(AnswerRecord.mentor_id, func.count(AnswerRecord.id)).group_by(
+                AnswerRecord.mentor_id
+            )
         ).all()
     )
     review_stats = {
@@ -750,9 +819,7 @@ def available_mentors(db: Session) -> list[Mentor]:
             availability_from_record(slot)
         )
     for slots in availability_by_mentor.values():
-        slots.sort(
-            key=lambda slot: (weekday_order[slot.day_of_week], slot.start_time)
-        )
+        slots.sort(key=lambda slot: (weekday_order[slot.day_of_week], slot.start_time))
 
     registered_mentors = [
         mentor_from_user(
@@ -763,7 +830,9 @@ def available_mentors(db: Session) -> list[Mentor]:
             mentees_count=int(mentee_counts.get(user.id, 0)),
             availability=availability_by_mentor.get(user.id, []),
         )
-        for user in db.scalars(select(UserRecord).where(UserRecord.role == "mentor")).all()
+        for user in db.scalars(
+            select(UserRecord).where(UserRecord.role == "mentor")
+        ).all()
     ]
     return [*registered_mentors, *static_mentors]
 
@@ -831,7 +900,9 @@ def review_eligibility_for(
     )
 
 
-def ensure_conversation_for_connection(connection: ConnectionRecord, db: Session) -> ConversationRecord:
+def ensure_conversation_for_connection(
+    connection: ConnectionRecord, db: Session
+) -> ConversationRecord:
     existing = db.get(ConversationRecord, connection.id)
     if existing:
         return existing
@@ -858,7 +929,10 @@ def ensure_conversation_for_connection(connection: ConnectionRecord, db: Session
 
 
 def upsert_profile_embedding(user: UserRecord, db: Session) -> ProfileEmbeddingRecord:
-    source_text = user_profile_text(user, perspective="mentor guidance" if user.role == "mentor" else "student goals")
+    source_text = user_profile_text(
+        user,
+        perspective="mentor guidance" if user.role == "mentor" else "student goals",
+    )
     embedding, model = embed_text(source_text)
     embedding_id = f"{user.id}_profile"
     record = db.get(ProfileEmbeddingRecord, embedding_id)
@@ -913,6 +987,15 @@ def ai_ranked_mentors(
     student_profile_embedding = ensure_profile_embedding(student, db)
     active_query_model = query_model or student_profile_embedding.model
     weights = matching_weights()
+
+    def score_component(score: float, weight: float) -> MatchScoreComponent:
+        bounded = max(0.0, min(1.0, score))
+        return MatchScoreComponent(
+            score=round(bounded * 100),
+            weight=round(weight * 100),
+            weighted_points=round(bounded * weight * 100, 1),
+        )
+
     ranked: list[Mentor] = []
     for mentor_user in mentors:
         embedding_record = ensure_profile_embedding(mentor_user, db)
@@ -968,7 +1051,9 @@ def ai_ranked_mentors(
             "match_score": bounded_score,
             "keyword_match_score": keyword_score,
             "profile_match_score": profile_score,
-            "match_label": "Complete profile match" if mode == "profile" else "Goal match",
+            "match_label": (
+                "Complete profile match" if mode == "profile" else "Goal match"
+            ),
             "match_reasons": match_explanation(
                 student,
                 mentor_user,
@@ -977,14 +1062,24 @@ def ai_ranked_mentors(
                 overlap,
                 query=query_text,
             ),
+            "match_score_breakdown": MatchScoreBreakdown(
+                semantic=score_component(semantic, weights.semantic),
+                structured=score_component(overlap, weights.structured),
+                faculty=score_component(faculty_boost, weights.faculty),
+                completeness=score_component(completeness, weights.completeness),
+                total=bounded_score,
+            ),
+            "embedding_model": active_query_model,
+            "embedding_provider": (
+                "local" if active_query_model.startswith("local-hashing") else "openai"
+            ),
+            "embedding_fallback": active_query_model.startswith("local-hashing"),
         }
         if mode == "profile":
             score_update["profile_match_score"] = bounded_score
         else:
             score_update["goal_match_score"] = bounded_score
-        mentor = base_mentor.model_copy(
-            update=score_update
-        )
+        mentor = base_mentor.model_copy(update=score_update)
         if mentor.match_score >= minimum_score:
             ranked.append(mentor)
     db.commit()
@@ -1315,7 +1410,9 @@ def update_mentor_review(
 
 
 @app.post("/recommendations", response_model=list[Mentor])
-def recommendations(payload: RecommendationRequest, db: Session = Depends(get_db)) -> list[Mentor]:
+def recommendations(
+    payload: RecommendationRequest, db: Session = Depends(get_db)
+) -> list[Mentor]:
     ranked = []
     for mentor in available_mentors(db):
         keyword_score = score_mentor(mentor, payload)
@@ -1337,10 +1434,14 @@ def recommendations(payload: RecommendationRequest, db: Session = Depends(get_db
 
 
 @app.post("/ai/profile-match", response_model=list[Mentor])
-def ai_profile_match(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> list[Mentor]:
+def ai_profile_match(
+    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
+) -> list[Mentor]:
     student = get_user_from_token(authorization, db)
     if student.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can request mentor matches")
+        raise HTTPException(
+            status_code=403, detail="Only students can request mentor matches"
+        )
     student_embedding = ensure_profile_embedding(student, db)
     return ai_ranked_mentors(
         student,
@@ -1352,10 +1453,16 @@ def ai_profile_match(authorization: str | None = Header(default=None), db: Sessi
 
 
 @app.post("/ai/goal-search", response_model=list[Mentor])
-def ai_goal_search(payload: GoalSearchRequest, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> list[Mentor]:
+def ai_goal_search(
+    payload: GoalSearchRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[Mentor]:
     student = get_user_from_token(authorization, db)
     if student.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can search for mentors")
+        raise HTTPException(
+            status_code=403, detail="Only students can search for mentors"
+        )
     embedding, model = embed_text(goal_search_text(student, payload.query))
     return ai_ranked_mentors(
         student,
@@ -1369,21 +1476,32 @@ def ai_goal_search(payload: GoalSearchRequest, authorization: str | None = Heade
 
 
 @app.get("/connections", response_model=list[ConnectionPublic])
-def list_connections(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> list[ConnectionPublic]:
+def list_connections(
+    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
+) -> list[ConnectionPublic]:
     user = get_user_from_token(authorization, db)
     records = db.scalars(
         select(ConnectionRecord)
-        .where((ConnectionRecord.student_id == user.id) | (ConnectionRecord.mentor_id == user.id))
+        .where(
+            (ConnectionRecord.student_id == user.id)
+            | (ConnectionRecord.mentor_id == user.id)
+        )
         .order_by(ConnectionRecord.updated_at.desc())
     ).all()
     return [connection_from_record(record) for record in records]
 
 
 @app.post("/connections/{mentor_id}", response_model=ConnectionPublic)
-def request_connection(mentor_id: str, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> ConnectionPublic:
+def request_connection(
+    mentor_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ConnectionPublic:
     user = get_user_from_token(authorization, db)
     if user.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can request mentor connections")
+        raise HTTPException(
+            status_code=403, detail="Only students can request mentor connections"
+        )
     mentor = find_mentor_by_id(mentor_id, db)
     connection_id = f"{user.id}_{mentor.id}"
     existing = db.get(ConnectionRecord, connection_id)
@@ -1405,13 +1523,20 @@ def request_connection(mentor_id: str, authorization: str | None = Header(defaul
 
 
 @app.post("/connections/{connection_id}/accept", response_model=ConversationPublic)
-def accept_connection(connection_id: str, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> ConversationPublic:
+def accept_connection(
+    connection_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ConversationPublic:
     user = get_user_from_token(authorization, db)
     connection = db.get(ConnectionRecord, connection_id)
     if connection is None:
         raise HTTPException(status_code=404, detail="Connection request not found")
     if user.id != connection.mentor_id:
-        raise HTTPException(status_code=403, detail="Only the receiving mentor can accept this connection")
+        raise HTTPException(
+            status_code=403,
+            detail="Only the receiving mentor can accept this connection",
+        )
     connection.status = "accepted"
     conversation = ensure_conversation_for_connection(connection, db)
     db.commit()
@@ -1427,16 +1552,24 @@ def accept_connection(connection_id: str, authorization: str | None = Header(def
 
 @app.get("/qa/questions", response_model=list[QuestionPublic])
 def list_questions(db: Session = Depends(get_db)) -> list[QuestionPublic]:
-    records = db.scalars(
-        select(QuestionRecord)
-        .options(joinedload(QuestionRecord.answers))
-        .order_by(QuestionRecord.created_at.desc())
-    ).unique().all()
+    records = (
+        db.scalars(
+            select(QuestionRecord)
+            .options(joinedload(QuestionRecord.answers))
+            .order_by(QuestionRecord.created_at.desc())
+        )
+        .unique()
+        .all()
+    )
     return [question_from_record(record) for record in records]
 
 
 @app.post("/qa/questions", response_model=QuestionPublic)
-def create_question(payload: QuestionCreate, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> QuestionPublic:
+def create_question(
+    payload: QuestionCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> QuestionPublic:
     user = get_user_from_token(authorization, db)
     if user.role != "student":
         raise HTTPException(status_code=403, detail="Only students can ask questions")
@@ -1450,7 +1583,9 @@ def create_question(payload: QuestionCreate, authorization: str | None = Header(
         body=payload.body,
         tags=payload.tags,
         attachments=payload.attachments,
-        key_terms=extract_key_terms(payload.topic, payload.title, payload.body, existing=payload.tags),
+        key_terms=extract_key_terms(
+            payload.topic, payload.title, payload.body, existing=payload.tags
+        ),
     )
     db.add(question)
     db.commit()
@@ -1459,7 +1594,12 @@ def create_question(payload: QuestionCreate, authorization: str | None = Header(
 
 
 @app.post("/qa/questions/{question_id}/answers", response_model=QuestionPublic)
-def answer_question(question_id: str, payload: AnswerCreate, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> QuestionPublic:
+def answer_question(
+    question_id: str,
+    payload: AnswerCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> QuestionPublic:
     user = get_user_from_token(authorization, db)
     if user.role != "mentor":
         raise HTTPException(status_code=403, detail="Only mentors can answer questions")
@@ -1501,27 +1641,44 @@ def answer_question(question_id: str, payload: AnswerCreate, authorization: str 
 
 
 @app.get("/conversations", response_model=list[ConversationPublic])
-def list_conversations(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> list[ConversationPublic]:
+def list_conversations(
+    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
+) -> list[ConversationPublic]:
     user = get_user_from_token(authorization, db)
-    records = db.scalars(
-        select(ConversationRecord)
-        .options(joinedload(ConversationRecord.messages))
-        .where((ConversationRecord.student_id == user.id) | (ConversationRecord.mentor_id == user.id))
-        .order_by(ConversationRecord.updated_at.desc())
-    ).unique().all()
+    records = (
+        db.scalars(
+            select(ConversationRecord)
+            .options(joinedload(ConversationRecord.messages))
+            .where(
+                (ConversationRecord.student_id == user.id)
+                | (ConversationRecord.mentor_id == user.id)
+            )
+            .order_by(ConversationRecord.updated_at.desc())
+        )
+        .unique()
+        .all()
+    )
     return [conversation_from_record(record) for record in records]
 
 
 @app.post("/conversations/{mentor_id}", response_model=ConversationPublic)
-def start_conversation(mentor_id: str, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> ConversationPublic:
+def start_conversation(
+    mentor_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ConversationPublic:
     user = get_user_from_token(authorization, db)
     mentor = find_mentor_by_id(mentor_id, db)
     conversation_id = f"{user.id}_{mentor.id}"
     connection = db.get(ConnectionRecord, conversation_id)
     if connection is None:
-        raise HTTPException(status_code=403, detail="Connect with this mentor before messaging")
+        raise HTTPException(
+            status_code=403, detail="Connect with this mentor before messaging"
+        )
     if connection.status != "accepted":
-        raise HTTPException(status_code=403, detail="Connection request is waiting for mentor approval")
+        raise HTTPException(
+            status_code=403, detail="Connection request is waiting for mentor approval"
+        )
     existing = db.scalar(
         select(ConversationRecord)
         .options(joinedload(ConversationRecord.messages))
@@ -1541,8 +1698,15 @@ def start_conversation(mentor_id: str, authorization: str | None = Header(defaul
     return conversation_from_record(refreshed)
 
 
-@app.post("/conversations/{conversation_id}/messages", response_model=ConversationPublic)
-def send_message(conversation_id: str, payload: MessageCreate, authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> ConversationPublic:
+@app.post(
+    "/conversations/{conversation_id}/messages", response_model=ConversationPublic
+)
+def send_message(
+    conversation_id: str,
+    payload: MessageCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ConversationPublic:
     user = get_user_from_token(authorization, db)
     conversation = db.scalar(
         select(ConversationRecord)
@@ -1552,7 +1716,9 @@ def send_message(conversation_id: str, payload: MessageCreate, authorization: st
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     if user.id not in {conversation.student_id, conversation.mentor_id}:
-        raise HTTPException(status_code=403, detail="You are not part of this conversation")
+        raise HTTPException(
+            status_code=403, detail="You are not part of this conversation"
+        )
 
     message = MessageRecord(
         id=f"m_{uuid4().hex[:10]}",
