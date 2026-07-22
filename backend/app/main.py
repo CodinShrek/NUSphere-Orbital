@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time, timezone
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
@@ -37,6 +37,14 @@ from .models import (
     ReviewRecord,
     UserRecord,
 )
+from .qa_archive import (
+    MIN_DUPLICATE_SCORE,
+    SUMMARY_VERSION,
+    duplicate_score,
+    extract_key_terms,
+    summarise_answer,
+    topic_cluster,
+)
 
 
 Role = Literal["student", "mentor"]
@@ -48,6 +56,21 @@ Weekday = Literal[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
 ]
 AvailabilityMode = Literal["online", "in_person", "hybrid"]
+QuestionTitle = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=5, max_length=500)
+]
+QuestionTopic = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=2, max_length=255)
+]
+QuestionBody = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=10, max_length=5000)
+]
+QuestionTag = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+]
+AttachmentName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+]
 
 
 class ProfileSyncRequest(BaseModel):
@@ -264,16 +287,19 @@ class GoalSearchRequest(BaseModel):
     minimum_score: int = 0
 
 
-class QuestionCreate(BaseModel):
-    title: str = Field(min_length=5)
-    topic: str = Field(min_length=2)
-    body: str = Field(min_length=10)
-    tags: list[str] = Field(default_factory=list)
-    attachments: list[str] = Field(default_factory=list)
+class QuestionSuggestionRequest(BaseModel):
+    title: QuestionTitle
+    topic: QuestionTopic
+    body: QuestionBody
+    tags: list[QuestionTag] = Field(default_factory=list, max_length=12)
+
+
+class QuestionCreate(QuestionSuggestionRequest):
+    attachments: list[AttachmentName] = Field(default_factory=list, max_length=10)
 
 
 class AnswerCreate(BaseModel):
-    body: str = Field(min_length=10)
+    body: QuestionBody
 
 
 class AnswerPublic(BaseModel):
@@ -282,6 +308,7 @@ class AnswerPublic(BaseModel):
     mentor_name: str
     body: str
     summary: str
+    summary_version: str
     created_at: str
 
 
@@ -291,12 +318,24 @@ class QuestionPublic(BaseModel):
     student_name: str
     title: str
     topic: str
+    topic_cluster: str
     body: str
     tags: list[str]
     attachments: list[str] = Field(default_factory=list)
     key_terms: list[str] = Field(default_factory=list)
     created_at: str
     answers: list[AnswerPublic] = Field(default_factory=list)
+
+
+class DuplicateQuestionSuggestion(BaseModel):
+    question_id: str
+    title: str
+    topic: str
+    topic_cluster: str
+    similarity_score: int
+    evidence: list[str] = Field(default_factory=list)
+    answer_count: int
+    latest_summary: str | None = None
 
 
 class MessageCreate(BaseModel):
@@ -398,6 +437,7 @@ def answer_from_record(record: AnswerRecord) -> AnswerPublic:
         mentor_name=record.mentor_name,
         body=record.body,
         summary=record.summary,
+        summary_version=record.summary_version,
         created_at=record.created_at.isoformat(),
     )
 
@@ -409,6 +449,7 @@ def question_from_record(record: QuestionRecord) -> QuestionPublic:
         student_name=record.student_name,
         title=record.title,
         topic=record.topic,
+        topic_cluster=record.topic_cluster,
         body=record.body,
         tags=record.tags or [],
         attachments=record.attachments or [],
@@ -609,59 +650,6 @@ def recommendation_request_from_user(user: UserRecord) -> RecommendationRequest:
         faculty=user.faculty,
         minimum_score=0,
     )
-
-
-def summarise_answer(body: str) -> str:
-    words = body.strip().split()
-    if len(words) <= 18:
-        return body.strip()
-    return " ".join(words[:18]).rstrip(".,") + "."
-
-
-def extract_key_terms(*parts: str, existing: list[str] | None = None) -> list[str]:
-    stop_words = {
-        "about",
-        "after",
-        "also",
-        "and",
-        "are",
-        "can",
-        "for",
-        "from",
-        "have",
-        "help",
-        "how",
-        "into",
-        "nus",
-        "should",
-        "that",
-        "the",
-        "this",
-        "what",
-        "when",
-        "where",
-        "with",
-        "would",
-    }
-    terms: list[str] = []
-    for item in existing or []:
-        cleaned = item.strip()
-        if cleaned and cleaned.lower() not in {term.lower() for term in terms}:
-            terms.append(cleaned)
-
-    for part in parts:
-        words = "".join(
-            ch if ch.isalnum() or ch.isspace() else " " for ch in part
-        ).split()
-        for word in words:
-            cleaned = word.strip()
-            if len(cleaned) < 3 or cleaned.lower() in stop_words:
-                continue
-            if cleaned.lower() not in {term.lower() for term in terms}:
-                terms.append(cleaned)
-            if len(terms) >= 8:
-                return terms
-    return terms[:8]
 
 
 def now_iso() -> str:
@@ -1564,6 +1552,65 @@ def list_questions(db: Session = Depends(get_db)) -> list[QuestionPublic]:
     return [question_from_record(record) for record in records]
 
 
+@app.post(
+    "/qa/questions/suggestions",
+    response_model=list[DuplicateQuestionSuggestion],
+)
+def suggest_duplicate_questions(
+    payload: QuestionSuggestionRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[DuplicateQuestionSuggestion]:
+    user = get_user_from_token(authorization, db)
+    if user.role != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Only students can check or post questions",
+        )
+
+    records = (
+        db.scalars(
+            select(QuestionRecord)
+            .options(joinedload(QuestionRecord.answers))
+            .order_by(QuestionRecord.created_at.desc())
+            .limit(100)
+        )
+        .unique()
+        .all()
+    )
+    suggestions: list[DuplicateQuestionSuggestion] = []
+    for record in records:
+        similarity = duplicate_score(
+            draft_title=payload.title,
+            draft_topic=payload.topic,
+            draft_body=payload.body,
+            draft_tags=payload.tags,
+            candidate_title=record.title,
+            candidate_topic=record.topic,
+            candidate_body=record.body,
+            candidate_terms=[*(record.tags or []), *(record.key_terms or [])],
+            candidate_cluster=record.topic_cluster,
+        )
+        if similarity.score < MIN_DUPLICATE_SCORE:
+            continue
+        suggestions.append(
+            DuplicateQuestionSuggestion(
+                question_id=record.id,
+                title=record.title,
+                topic=record.topic,
+                topic_cluster=record.topic_cluster,
+                similarity_score=similarity.score,
+                evidence=similarity.evidence,
+                answer_count=len(record.answers),
+                latest_summary=(record.answers[-1].summary if record.answers else None),
+            )
+        )
+    return sorted(
+        suggestions,
+        key=lambda item: (-item.similarity_score, -item.answer_count, item.title),
+    )[:5]
+
+
 @app.post("/qa/questions", response_model=QuestionPublic)
 def create_question(
     payload: QuestionCreate,
@@ -1580,6 +1627,9 @@ def create_question(
         student_name=user.name,
         title=payload.title,
         topic=payload.topic,
+        topic_cluster=topic_cluster(
+            payload.topic, payload.title, payload.body, *payload.tags
+        ),
         body=payload.body,
         tags=payload.tags,
         attachments=payload.attachments,
@@ -1619,6 +1669,7 @@ def answer_question(
         mentor_name=user.name,
         body=payload.body,
         summary=summarise_answer(payload.body),
+        summary_version=SUMMARY_VERSION,
     )
     db.add(answer)
     db.flush()
