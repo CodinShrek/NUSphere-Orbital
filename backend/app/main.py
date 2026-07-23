@@ -359,7 +359,18 @@ class ConversationPublic(BaseModel):
     mentor_programme: str
     last_message: str
     updated_at: str
+    unread_count: int = 0
+    last_read_at: str | None = None
+    is_pinned: bool = False
+    is_archived: bool = False
+    is_muted: bool = False
     messages: list[MessagePublic] = Field(default_factory=list)
+
+
+class ConversationStateUpdate(BaseModel):
+    is_pinned: bool | None = None
+    is_archived: bool | None = None
+    is_muted: bool | None = None
 
 
 class ConnectionPublic(BaseModel):
@@ -469,7 +480,62 @@ def message_from_record(record: MessageRecord) -> MessagePublic:
     )
 
 
-def conversation_from_record(record: ConversationRecord) -> ConversationPublic:
+def conversation_role(record: ConversationRecord, user: UserRecord) -> Literal["student", "mentor"]:
+    if user.id == record.student_id:
+        return "student"
+    if user.id == record.mentor_id:
+        return "mentor"
+    raise HTTPException(status_code=403, detail="You are not part of this conversation")
+
+
+def conversation_last_read_at(
+    record: ConversationRecord, role: Literal["student", "mentor"]
+) -> datetime | None:
+    return record.student_last_read_at if role == "student" else record.mentor_last_read_at
+
+
+def set_conversation_last_read_at(
+    record: ConversationRecord, role: Literal["student", "mentor"], value: datetime
+) -> None:
+    if role == "student":
+        record.student_last_read_at = value
+    else:
+        record.mentor_last_read_at = value
+
+
+def conversation_flag(
+    record: ConversationRecord, role: Literal["student", "mentor"], field: str
+) -> bool:
+    return bool(getattr(record, f"{role}_{field}"))
+
+
+def set_conversation_flag(
+    record: ConversationRecord,
+    role: Literal["student", "mentor"],
+    field: str,
+    value: bool,
+) -> None:
+    setattr(record, f"{role}_{field}", value)
+
+
+def unread_messages_for_user(
+    record: ConversationRecord, role: Literal["student", "mentor"]
+) -> int:
+    user_id = record.student_id if role == "student" else record.mentor_id
+    last_read_at = conversation_last_read_at(record, role)
+    return sum(
+        1
+        for message in record.messages
+        if message.sender_id != user_id
+        and (last_read_at is None or message.created_at > last_read_at)
+    )
+
+
+def conversation_from_record(
+    record: ConversationRecord, user: UserRecord | None = None
+) -> ConversationPublic:
+    role = conversation_role(record, user) if user is not None else None
+    last_read_at = conversation_last_read_at(record, role) if role else None
     return ConversationPublic(
         id=record.id,
         student_id=record.student_id,
@@ -479,6 +545,11 @@ def conversation_from_record(record: ConversationRecord) -> ConversationPublic:
         mentor_programme=record.mentor_programme,
         last_message=record.last_message,
         updated_at=record.updated_at.isoformat(),
+        unread_count=unread_messages_for_user(record, role) if role else 0,
+        last_read_at=last_read_at.isoformat() if last_read_at else None,
+        is_pinned=conversation_flag(record, role, "pinned") if role else False,
+        is_archived=conversation_flag(record, role, "archived") if role else False,
+        is_muted=conversation_flag(record, role, "muted") if role else False,
         messages=[message_from_record(message) for message in record.messages],
     )
 
@@ -894,12 +965,14 @@ def ensure_conversation_for_connection(
     existing = db.get(ConversationRecord, connection.id)
     if existing:
         return existing
+    created_at = datetime.now(timezone.utc)
     greeting = MessageRecord(
         id=f"m_{uuid4().hex[:10]}",
         conversation_id=connection.id,
         sender_id=connection.mentor_id,
         sender_name=connection.mentor_name,
         body=f"Connection accepted. Hi {connection.student_name}, happy to continue the conversation here.",
+        created_at=created_at,
     )
     conversation = ConversationRecord(
         id=connection.id,
@@ -909,6 +982,8 @@ def ensure_conversation_for_connection(
         mentor_name=connection.mentor_name,
         mentor_programme=connection.mentor_programme,
         last_message=greeting.body,
+        mentor_last_read_at=created_at,
+        updated_at=created_at,
     )
     db.add(conversation)
     db.add(greeting)
@@ -1535,7 +1610,7 @@ def accept_connection(
     )
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation_from_record(refreshed)
+    return conversation_from_record(refreshed, user)
 
 
 @app.get("/qa/questions", response_model=list[QuestionPublic])
@@ -1709,7 +1784,11 @@ def list_conversations(
         .unique()
         .all()
     )
-    return [conversation_from_record(record) for record in records]
+    conversations = [conversation_from_record(record, user) for record in records]
+    return sorted(
+        conversations,
+        key=lambda conversation: (not conversation.is_pinned, conversation.is_archived),
+    )
 
 
 @app.post("/conversations/{mentor_id}", response_model=ConversationPublic)
@@ -1736,7 +1815,7 @@ def start_conversation(
         .where(ConversationRecord.id == conversation_id)
     )
     if existing:
-        return conversation_from_record(existing)
+        return conversation_from_record(existing, user)
     ensure_conversation_for_connection(connection, db)
     db.commit()
     refreshed = db.scalar(
@@ -1746,7 +1825,55 @@ def start_conversation(
     )
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation_from_record(refreshed)
+    return conversation_from_record(refreshed, user)
+
+
+@app.post("/conversations/{conversation_id}/read", response_model=ConversationPublic)
+def mark_conversation_read(
+    conversation_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ConversationPublic:
+    user = get_user_from_token(authorization, db)
+    conversation = db.scalar(
+        select(ConversationRecord)
+        .options(joinedload(ConversationRecord.messages))
+        .where(ConversationRecord.id == conversation_id)
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    role = conversation_role(conversation, user)
+    set_conversation_last_read_at(conversation, role, datetime.now(timezone.utc))
+    db.commit()
+    db.refresh(conversation)
+    return conversation_from_record(conversation, user)
+
+
+@app.patch("/conversations/{conversation_id}/state", response_model=ConversationPublic)
+def update_conversation_state(
+    conversation_id: str,
+    payload: ConversationStateUpdate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ConversationPublic:
+    user = get_user_from_token(authorization, db)
+    conversation = db.scalar(
+        select(ConversationRecord)
+        .options(joinedload(ConversationRecord.messages))
+        .where(ConversationRecord.id == conversation_id)
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    role = conversation_role(conversation, user)
+    if payload.is_pinned is not None:
+        set_conversation_flag(conversation, role, "pinned", payload.is_pinned)
+    if payload.is_archived is not None:
+        set_conversation_flag(conversation, role, "archived", payload.is_archived)
+    if payload.is_muted is not None:
+        set_conversation_flag(conversation, role, "muted", payload.is_muted)
+    db.commit()
+    db.refresh(conversation)
+    return conversation_from_record(conversation, user)
 
 
 @app.post(
@@ -1771,16 +1898,25 @@ def send_message(
             status_code=403, detail="You are not part of this conversation"
         )
 
+    now = datetime.now(timezone.utc)
     message = MessageRecord(
         id=f"m_{uuid4().hex[:10]}",
         conversation_id=conversation.id,
         sender_id=user.id,
         sender_name=user.name,
         body=payload.body,
+        created_at=now,
     )
     db.add(message)
+    role = conversation_role(conversation, user)
+    recipient_role: Literal["student", "mentor"] = (
+        "mentor" if role == "student" else "student"
+    )
     conversation.last_message = message.body
-    conversation.updated_at = datetime.now(timezone.utc)
+    conversation.updated_at = now
+    set_conversation_last_read_at(conversation, role, now)
+    set_conversation_flag(conversation, role, "archived", False)
+    set_conversation_flag(conversation, recipient_role, "archived", False)
     db.commit()
     refreshed = db.scalar(
         select(ConversationRecord)
@@ -1789,4 +1925,4 @@ def send_message(
     )
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation_from_record(refreshed)
+    return conversation_from_record(refreshed, user)

@@ -175,6 +175,20 @@ class ConversationRecord(Base):
     mentor_name: Mapped[str] = mapped_column(String(255), nullable=False)
     mentor_programme: Mapped[str] = mapped_column(String(255), nullable=False)
     last_message: Mapped[str] = mapped_column(Text, nullable=False)
+    student_last_read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    mentor_last_read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    student_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mentor_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    student_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    mentor_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    student_muted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mentor_muted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
