@@ -10,6 +10,7 @@ __pycache__/
 # Next.js
 node_modules/
 .next/
+frontend/.test-build/
 out/
 *.tsbuildinfo
 *.log

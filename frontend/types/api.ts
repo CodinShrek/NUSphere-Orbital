@@ -143,6 +143,7 @@ export type Answer = {
   mentor_name: string;
   body: string;
   summary: string;
+  summary_version: string;
   created_at: string;
 };
 
@@ -152,12 +153,24 @@ export type Question = {
   student_name: string;
   title: string;
   topic: string;
+  topic_cluster: string;
   body: string;
   tags: string[];
   attachments: string[];
   key_terms: string[];
   created_at: string;
   answers: Answer[];
+};
+
+export type DuplicateQuestionSuggestion = {
+  question_id: string;
+  title: string;
+  topic: string;
+  topic_cluster: string;
+  similarity_score: number;
+  evidence: string[];
+  answer_count: number;
+  latest_summary?: string | null;
 };
 
 export type ConversationMessage = {

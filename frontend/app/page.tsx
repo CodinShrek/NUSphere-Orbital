@@ -23,7 +23,9 @@ import {
   VerificationBadge,
   VerificationControls,
 } from "@/components/mentors/MentorQuality";
+import { QAArchive } from "@/components/qa/QAArchive";
 import { OptionDatalist, TextAreaInput, TextInput } from "@/components/ui/FormControls";
+import { Panel } from "@/components/ui/Panel";
 import {
   accommodationOptions,
   ccas,
@@ -47,6 +49,7 @@ import {
   requestConnection,
   sendConversationMessage,
   startConversation,
+  suggestDuplicateQuestions,
   updateProfile,
 } from "@/lib/api";
 import { authenticateSession, signOut } from "@/lib/auth";
@@ -57,6 +60,7 @@ import type {
   AvailabilitySlot,
   Connection,
   Conversation,
+  DuplicateQuestionSuggestion,
   Mentor,
   MentorType,
   Question,
@@ -225,6 +229,11 @@ export default function Home() {
     setQuestions((current) => [created, ...current]);
   }
 
+  async function handleSuggestDuplicateQuestions(payload: { title: string; topic: string; body: string; tags: string[] }): Promise<DuplicateQuestionSuggestion[]> {
+    if (!token) return [];
+    return suggestDuplicateQuestions(token, payload);
+  }
+
   async function handleAnswerQuestion(questionId: string, body: string) {
     if (!token) return;
     const updated = await answerQuestion(token, questionId, body);
@@ -346,30 +355,12 @@ export default function Home() {
     <AppShell activeView={activeView} setActiveView={setActiveView} user={user} onLogout={handleLogout}>
       {activeView === "home" && <Dashboard user={user} questions={questions} connections={connections} conversations={conversations} setActiveView={setActiveView} onAcceptConnection={handleAcceptConnection} />}
       {activeView === "find" && <FindMentors mentors={mentors} connections={connections} token={token} user={user} onOpenMentorProfile={handleOpenMentorProfile} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
-      {activeView === "qa" && <QAPlatform user={user} questions={questions} onCreateQuestion={handleCreateQuestion} onAnswerQuestion={handleAnswerQuestion} />}
+      {activeView === "qa" && <QAArchive user={user} questions={questions} onCreateQuestion={handleCreateQuestion} onAnswerQuestion={handleAnswerQuestion} onSuggestDuplicates={handleSuggestDuplicateQuestions} />}
       {activeView === "messages" && <Messages user={user} connections={connections} conversations={conversations} activeConversationId={activeConversationId} setActiveConversationId={setActiveConversationId} onAcceptConnection={handleAcceptConnection} onSendMessage={handleSendMessage} setActiveView={setActiveView} />}
       {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} token={token} user={user} setActiveView={setActiveView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} onReviewsChange={refreshMentorData} />}
       {activeView === "my-profile" && <UserProfile user={user} token={token} setActiveView={setActiveView} onSaveProfile={handleSaveProfile} onAvailabilityChange={handleAvailabilityChange} onVerificationChange={handleVerificationChange} />}
     </AppShell>
   );
-}
-
-function frequentQuestionTerms(questions: Question[]) {
-  const counts = new Map<string, number>();
-  questions.slice(0, 12).forEach((question) => {
-    [...question.tags, ...(question.key_terms ?? []), question.topic]
-      .map((term) => term.trim())
-      .filter(Boolean)
-      .forEach((term) => {
-        const key = term.toLowerCase();
-        const existing = Array.from(counts.keys()).find((item) => item.toLowerCase() === key) ?? term;
-        counts.set(existing, (counts.get(existing) ?? 0) + 1);
-      });
-  });
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([term]) => term)
-    .slice(0, 10);
 }
 
 function profileCompletion(user: User) {
@@ -1148,184 +1139,6 @@ function UserProfile({
   );
 }
 
-function QAPlatform({
-  user,
-  questions,
-  onCreateQuestion,
-  onAnswerQuestion,
-}: {
-  user: User;
-  questions: Question[];
-  onCreateQuestion: (payload: { title: string; topic: string; body: string; tags: string[]; attachments: string[] }) => Promise<void>;
-  onAnswerQuestion: (questionId: string, body: string) => Promise<void>;
-}) {
-  const [title, setTitle] = useState("How should I choose between NOC and exchange?");
-  const [topic, setTopic] = useState("NOC / Exchange");
-  const [body, setBody] = useState("I want to understand which option is better if I care about startups, internships, and keeping my module plan manageable.");
-  const [tags, setTags] = useState("NUS Overseas Colleges, Exchange, Internship planning");
-  const [attachments, setAttachments] = useState<string[]>([]);
-  const [archiveSearch, setArchiveSearch] = useState("");
-  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
-  const recentTerms = useMemo(() => frequentQuestionTerms(questions), [questions]);
-  const filteredQuestions = useMemo(() => {
-    const query = archiveSearch.trim().toLowerCase();
-    if (!query) return questions;
-    return questions.filter((question) =>
-      [
-        question.title,
-        question.topic,
-        question.body,
-        ...question.tags,
-        ...(question.key_terms ?? []),
-        ...question.answers.flatMap((answer) => [answer.body, answer.summary]),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query)
-    );
-  }, [archiveSearch, questions]);
-
-  async function submitQuestion() {
-    await onCreateQuestion({ title, topic, body, tags: splitList(tags), attachments });
-    setTitle("");
-    setTopic("");
-    setBody("");
-    setTags("");
-    setAttachments([]);
-  }
-
-  async function submitAnswer(questionId: string) {
-    const answer = answerDrafts[questionId] ?? "";
-    if (!answer.trim()) return;
-    await onAnswerQuestion(questionId, answer);
-    setAnswerDrafts((current) => ({ ...current, [questionId]: "" }));
-  }
-
-  return (
-    <section className="grid grid-cols-[390px_1fr] gap-7 p-8 max-xl:grid-cols-1">
-      <aside className="space-y-6">
-        <Panel title="Knowledge Archive">
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9aa1b3]" size={18} />
-            <input className="field pl-11" value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="Search previous answers by keyword" />
-          </div>
-          <p className="mt-3 text-sm font-medium text-[#737b8f]">{filteredQuestions.length} matching archived queries</p>
-        </Panel>
-        <Panel title="Frequently Asked Recently">
-          <div className="flex flex-wrap gap-2">
-            {(recentTerms.length ? recentTerms : ["NOC", "Exchange", "Internships", "Research"]).map((term, index) => (
-              <button
-                key={term}
-                className={`chip ${archiveSearch.toLowerCase() === term.toLowerCase() ? "bg-nusPurple text-white" : pastel[index % pastel.length]}`}
-                onClick={() => {
-                  setArchiveSearch(term);
-                  setTopic(term);
-                  setTags((current) => current || term);
-                }}
-              >
-                {term}
-              </button>
-            ))}
-          </div>
-        </Panel>
-        <Panel title={user.role === "mentor" ? "Mentor Access" : "Post a Query"}>
-        {user.role === "student" ? (
-          <div className="space-y-4">
-            <label className="block text-sm font-bold text-[#3f4659]">
-              Query subject
-              <input className="field mt-2" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Short title for your query" />
-            </label>
-            <label className="block text-sm font-bold text-[#3f4659]">
-              Area of concern
-              <input className="field mt-2" value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="NOC, exchange, internships, research..." list="recent-query-terms" />
-            </label>
-            <label className="block text-sm font-bold text-[#3f4659]">
-              Query description
-              <textarea className="field mt-2 min-h-32 resize-y py-3" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Describe the context, what you have tried, and what guidance you need." />
-            </label>
-            <label className="block text-sm font-bold text-[#3f4659]">
-              Key terms
-              <input className="field mt-2" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Comma separated, e.g. NOC, exchange, internship planning" list="recent-query-terms" />
-            </label>
-            <label className="block text-sm font-bold text-[#3f4659]">
-              Add files
-              <input
-                className="mt-2 block w-full rounded-xl border border-[#c8cfde] bg-white px-4 py-3 text-sm font-medium text-[#596173]"
-                type="file"
-                multiple
-                onChange={(event) => setAttachments(Array.from(event.target.files ?? []).map((file) => file.name))}
-              />
-            </label>
-            {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {attachments.map((file) => <span key={file} className="chip bg-[#f1f4f9] text-[#596173]">{file}</span>)}
-              </div>
-            )}
-            <datalist id="recent-query-terms">
-              {recentTerms.map((term) => <option key={term} value={term} />)}
-            </datalist>
-            <button className="h-12 w-full rounded-xl bg-nusPurple font-bold text-white" onClick={submitQuestion}>Post query</button>
-          </div>
-        ) : (
-          <p className="font-medium text-[#737b8f]">Only mentor accounts can respond to queries. Your responses are summarised and stored in the knowledge archive for future students.</p>
-        )}
-        </Panel>
-      </aside>
-
-      <div className="space-y-5">
-        {filteredQuestions.map((question) => (
-          <article key={question.id} className="card p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-black uppercase text-[#9aa1b3]">{question.topic || "General concern"}</p>
-                <h2 className="mt-1 text-2xl font-black">{question.title}</h2>
-                <p className="mt-2 font-medium text-[#737b8f]">Asked by {question.student_name}</p>
-              </div>
-              <span className="chip bg-[#f3f0ff] text-nusPurple">{question.answers.length} archived answers</span>
-            </div>
-            <p className="mt-4 rounded-xl border border-dashed border-[#cfd6e6] bg-[#f8faff] p-4 font-medium text-[#596173]">{question.body}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {[...question.tags, ...(question.key_terms ?? [])].filter((tag, index, all) => all.findIndex((item) => item.toLowerCase() === tag.toLowerCase()) === index).slice(0, 10).map((tag, index) => <span key={tag} className={`chip ${pastel[index % pastel.length]}`}>{tag}</span>)}
-            </div>
-            {question.attachments?.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {question.attachments.map((file) => <span key={file} className="chip bg-[#f1f4f9] text-[#596173]">{file}</span>)}
-              </div>
-            )}
-            <div className="mt-5 space-y-3">
-              {question.answers.map((answer) => (
-                <div key={answer.id} className="rounded-xl border border-[#d4dae8] bg-white p-4">
-                  <p className="font-black">{answer.mentor_name}</p>
-                  <p className="mt-2 font-medium text-[#596173]">{answer.body}</p>
-                  <p className="mt-3 rounded-lg bg-[#f3f0ff] px-3 py-2 text-sm font-bold text-nusPurple">Archive summary: {answer.summary}</p>
-                </div>
-              ))}
-              {!question.answers.length && <p className="rounded-xl border border-dashed border-[#cfd6e6] bg-[#f8faff] p-4 font-medium text-[#737b8f]">No mentor response yet.</p>}
-            </div>
-            {user.role === "mentor" && (
-              <div className="mt-5 flex gap-3 max-md:flex-col">
-                <input
-                  className="field"
-                  value={answerDrafts[question.id] ?? ""}
-                  onChange={(event) => setAnswerDrafts((current) => ({ ...current, [question.id]: event.target.value }))}
-                  placeholder="Write a mentor answer"
-                />
-                <button className="h-14 rounded-xl bg-nusPurple px-6 font-bold text-white" onClick={() => submitAnswer(question.id)}>Answer</button>
-              </div>
-            )}
-            {user.role !== "mentor" && <p className="mt-4 text-sm font-bold text-[#9aa1b3]">Only mentors can respond to posted queries.</p>}
-          </article>
-        ))}
-        {!filteredQuestions.length && (
-          <Panel title="No archived match">
-            <p className="font-medium text-[#737b8f]">Try another keyword or post a new query so mentors can add an answer to the archive.</p>
-          </Panel>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function Messages({
   user,
   connections,
@@ -1526,22 +1339,6 @@ function MentorProfile({
           <button className="h-12 w-full rounded-xl border border-[#a7bdf5] bg-white font-bold text-nusPurple" onClick={() => setActiveView("find")}>Back to mentors</button>
         </aside>
       </div>
-    </section>
-  );
-}
-
-function Panel({ title, children, action, onAction }: { title: string; children: React.ReactNode; action?: string; onAction?: () => void }) {
-  return (
-    <section className="card p-6">
-      <div className="mb-5 flex items-center justify-between">
-        <h3 className="text-lg font-black tracking-[0.01em]">{title}</h3>
-        {action && (
-          <button className="font-bold text-nusPurple" onClick={onAction}>
-            {action} {"->"}
-          </button>
-        )}
-      </div>
-      {children}
     </section>
   );
 }

@@ -3,6 +3,7 @@ import type {
   AvailabilitySlotInput,
   Connection,
   Conversation,
+  DuplicateQuestionSuggestion,
   Mentor,
   ProfileSyncPayload,
   Question,
@@ -22,6 +23,7 @@ export type {
   Connection,
   Conversation,
   ConversationMessage,
+  DuplicateQuestionSuggestion,
   Mentor,
   MentorType,
   ProfileSyncPayload,
@@ -144,6 +146,24 @@ export function createQuestion(
   },
 ) {
   return request<Question>("/qa/questions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function suggestDuplicateQuestions(
+  token: string,
+  payload: {
+    title: string;
+    topic: string;
+    body: string;
+    tags: string[];
+  },
+) {
+  return request<DuplicateQuestionSuggestion[]>("/qa/questions/suggestions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
