@@ -5,6 +5,7 @@ import type {
   Conversation,
   DuplicateQuestionSuggestion,
   Mentor,
+  Notification,
   ProfileSyncPayload,
   Question,
   Review,
@@ -26,6 +27,8 @@ export type {
   DuplicateQuestionSuggestion,
   Mentor,
   MentorType,
+  Notification,
+  NotificationType,
   ProfileSyncPayload,
   Question,
   RegisterPayload,
@@ -188,6 +191,68 @@ export function answerQuestion(
 
 export function fetchConversations(token: string) {
   return request<Conversation[]>("/conversations", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+export function markConversationRead(token: string, conversationId: string) {
+  return request<Conversation>(`/conversations/${conversationId}/read`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+export function updateConversationState(
+  token: string,
+  conversationId: string,
+  payload: {
+    is_pinned?: boolean;
+    is_archived?: boolean;
+    is_muted?: boolean;
+  },
+) {
+  return request<Conversation>(`/conversations/${conversationId}/state`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchNotifications(token: string, unreadOnly = false) {
+  const query = unreadOnly ? "?unread_only=true" : "";
+  return request<Notification[]>(`/notifications${query}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+export function fetchNotificationUnreadCount(token: string) {
+  return request<{ unread_count: number }>("/notifications/unread-count", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+export function markNotificationRead(token: string, notificationId: string) {
+  return request<Notification>(`/notifications/${notificationId}/read`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+export function markAllNotificationsRead(token: string) {
+  return request<{ unread_count: number }>("/notifications/read-all", {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
     },

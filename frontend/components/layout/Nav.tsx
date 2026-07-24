@@ -1,20 +1,37 @@
 "use client";
 
-import { Bell, LogOut, UserRound } from "lucide-react";
+import { LogOut, UserRound } from "lucide-react";
 
+import { NotificationPanel } from "@/components/notifications/NotificationPanel";
 import { Logo } from "@/components/ui/Logo";
-import type { User } from "@/types/api";
+import type { Notification, User } from "@/types/api";
 import type { View } from "@/types/navigation";
 
 export function Nav({
   activeView,
   setActiveView,
   user,
+  notifications,
+  notificationUnreadCount,
+  notificationsLoading,
+  notificationError,
+  setActiveConversationId,
+  onRefreshNotifications,
+  onMarkNotificationRead,
+  onMarkAllNotificationsRead,
   onLogout,
 }: {
   activeView: View;
   setActiveView: (view: View) => void;
   user: User;
+  notifications: Notification[];
+  notificationUnreadCount: number;
+  notificationsLoading: boolean;
+  notificationError: string;
+  setActiveConversationId: (id: string) => void;
+  onRefreshNotifications: () => Promise<void>;
+  onMarkNotificationRead: (notificationId: string) => Promise<void>;
+  onMarkAllNotificationsRead: () => Promise<void>;
   onLogout: () => void;
 }) {
   return (
@@ -53,12 +70,17 @@ export function Nav({
         </button>
       </div>
       <div className="flex items-center gap-3">
-        <button
-          className="grid h-11 w-11 place-items-center rounded-xl border border-[#cfd6e6] bg-[#f4f6fb]"
-          aria-label="Notifications"
-        >
-          <Bell size={18} />
-        </button>
+        <NotificationPanel
+          notifications={notifications}
+          unreadCount={notificationUnreadCount}
+          loading={notificationsLoading}
+          error={notificationError}
+          onRefresh={onRefreshNotifications}
+          onMarkRead={onMarkNotificationRead}
+          onMarkAllRead={onMarkAllNotificationsRead}
+          setActiveView={setActiveView}
+          setActiveConversationId={setActiveConversationId}
+        />
         <button
           className="grid h-11 w-11 place-items-center rounded-xl border border-[#cfd6e6] bg-[#f4f6fb] text-[#697085]"
           onClick={() => setActiveView("my-profile")}

@@ -190,7 +190,32 @@ export type Conversation = {
   mentor_programme: string;
   last_message: string;
   updated_at: string;
+  unread_count: number;
+  last_read_at?: string | null;
+  is_pinned: boolean;
+  is_archived: boolean;
+  is_muted: boolean;
   messages: ConversationMessage[];
+};
+
+export type NotificationType =
+  | "message"
+  | "question_created"
+  | "answer_created";
+
+export type Notification = {
+  id: string;
+  user_id: string;
+  actor_id?: string | null;
+  actor_name: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  target_type: string;
+  target_id: string;
+  is_read: boolean;
+  read_at?: string | null;
+  created_at: string;
 };
 
 export type Connection = {

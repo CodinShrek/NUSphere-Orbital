@@ -15,6 +15,7 @@ import type { Session } from "@supabase/supabase-js";
 
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppShell } from "@/components/layout/AppShell";
+import { MessagingCenter } from "@/components/messaging/MessagingCenter";
 import {
   AvailabilityEditor,
   AvailabilityList,
@@ -44,12 +45,18 @@ import {
   fetchAiProfileMatches,
   fetchConversations,
   fetchConnections,
+  fetchNotificationUnreadCount,
+  fetchNotifications,
   fetchQuestions,
   fetchRecommendations,
+  markAllNotificationsRead,
+  markConversationRead,
+  markNotificationRead,
   requestConnection,
   sendConversationMessage,
   startConversation,
   suggestDuplicateQuestions,
+  updateConversationState,
   updateProfile,
 } from "@/lib/api";
 import { authenticateSession, signOut } from "@/lib/auth";
@@ -63,6 +70,7 @@ import type {
   DuplicateQuestionSuggestion,
   Mentor,
   MentorType,
+  Notification,
   Question,
   User,
   VerificationStatus,
@@ -76,6 +84,10 @@ export default function Home() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationError, setNotificationError] = useState("");
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeView, setActiveView] = useState<View>("home");
   const [selectedMentorId, setSelectedMentorId] = useState("");
@@ -104,6 +116,8 @@ export default function Home() {
       setQuestions([]);
       setConnections([]);
       setConversations([]);
+      setNotifications([]);
+      setNotificationUnreadCount(0);
       setActiveConversationId("");
       setActiveView("home");
     }
@@ -197,6 +211,15 @@ export default function Home() {
         setActiveConversationId((current) => current || items[0]?.id || "");
       })
       .catch((err: Error) => setError(err.message));
+    setNotificationsLoading(true);
+    setNotificationError("");
+    Promise.all([fetchNotifications(token), fetchNotificationUnreadCount(token)])
+      .then(([items, unread]) => {
+        setNotifications(items);
+        setNotificationUnreadCount(unread.unread_count);
+      })
+      .catch((err: Error) => setNotificationError(err.message))
+      .finally(() => setNotificationsLoading(false));
   }, [token]);
 
   function handleAuthenticated(response: AuthenticatedSession) {
@@ -218,6 +241,8 @@ export default function Home() {
       setQuestions([]);
       setConnections([]);
       setConversations([]);
+      setNotifications([]);
+      setNotificationUnreadCount(0);
       setActiveConversationId("");
       setActiveView("home");
     }
@@ -227,6 +252,7 @@ export default function Home() {
     if (!token) return;
     const created = await createQuestion(token, payload);
     setQuestions((current) => [created, ...current]);
+    await refreshNotifications();
   }
 
   async function handleSuggestDuplicateQuestions(payload: { title: string; topic: string; body: string; tags: string[] }): Promise<DuplicateQuestionSuggestion[]> {
@@ -238,6 +264,7 @@ export default function Home() {
     if (!token) return;
     const updated = await answerQuestion(token, questionId, body);
     setQuestions((current) => current.map((question) => (question.id === updated.id ? updated : question)));
+    await refreshNotifications();
   }
 
   async function handleRequestConnection(mentorId: string) {
@@ -279,6 +306,56 @@ export default function Home() {
   async function handleSendMessage(conversationId: string, body: string) {
     if (!token) return;
     const updated = await sendConversationMessage(token, conversationId, body);
+    setConversations((current) => current.map((conversation) => (conversation.id === updated.id ? updated : conversation)));
+    await refreshNotifications();
+  }
+
+  async function refreshNotifications() {
+    if (!token) return;
+    setNotificationsLoading(true);
+    setNotificationError("");
+    try {
+      const [items, unread] = await Promise.all([
+        fetchNotifications(token),
+        fetchNotificationUnreadCount(token),
+      ]);
+      setNotifications(items);
+      setNotificationUnreadCount(unread.unread_count);
+    } catch (err) {
+      setNotificationError(err instanceof Error ? err.message : "Unable to load notifications");
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }
+
+  async function handleMarkNotificationRead(notificationId: string) {
+    if (!token) return;
+    const wasUnread = notifications.some((item) => item.id === notificationId && !item.is_read);
+    const updated = await markNotificationRead(token, notificationId);
+    setNotifications((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    if (wasUnread) setNotificationUnreadCount((current) => Math.max(0, current - 1));
+  }
+
+  async function handleMarkAllNotificationsRead() {
+    if (!token) return;
+    await markAllNotificationsRead(token);
+    const readAt = new Date().toISOString();
+    setNotifications((current) => current.map((item) => ({ ...item, is_read: true, read_at: item.read_at ?? readAt })));
+    setNotificationUnreadCount(0);
+  }
+
+  async function handleMarkConversationRead(conversationId: string) {
+    if (!token) return;
+    const updated = await markConversationRead(token, conversationId);
+    setConversations((current) => current.map((conversation) => (conversation.id === updated.id ? updated : conversation)));
+  }
+
+  async function handleUpdateConversationState(
+    conversationId: string,
+    payload: { is_pinned?: boolean; is_archived?: boolean; is_muted?: boolean },
+  ) {
+    if (!token) return;
+    const updated = await updateConversationState(token, conversationId, payload);
     setConversations((current) => current.map((conversation) => (conversation.id === updated.id ? updated : conversation)));
   }
 
@@ -352,11 +429,36 @@ export default function Home() {
   }
 
   return (
-    <AppShell activeView={activeView} setActiveView={setActiveView} user={user} onLogout={handleLogout}>
+    <AppShell
+      activeView={activeView}
+      setActiveView={setActiveView}
+      user={user}
+      notifications={notifications}
+      notificationUnreadCount={notificationUnreadCount}
+      notificationsLoading={notificationsLoading}
+      notificationError={notificationError}
+      setActiveConversationId={setActiveConversationId}
+      onRefreshNotifications={refreshNotifications}
+      onMarkNotificationRead={handleMarkNotificationRead}
+      onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+      onLogout={handleLogout}
+    >
       {activeView === "home" && <Dashboard user={user} questions={questions} connections={connections} conversations={conversations} setActiveView={setActiveView} onAcceptConnection={handleAcceptConnection} />}
       {activeView === "find" && <FindMentors mentors={mentors} connections={connections} token={token} user={user} onOpenMentorProfile={handleOpenMentorProfile} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
       {activeView === "qa" && <QAArchive user={user} questions={questions} onCreateQuestion={handleCreateQuestion} onAnswerQuestion={handleAnswerQuestion} onSuggestDuplicates={handleSuggestDuplicateQuestions} />}
-      {activeView === "messages" && <Messages user={user} connections={connections} conversations={conversations} activeConversationId={activeConversationId} setActiveConversationId={setActiveConversationId} onAcceptConnection={handleAcceptConnection} onSendMessage={handleSendMessage} setActiveView={setActiveView} />}
+      {activeView === "messages" && (
+        <MessagingCenter
+          user={user}
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          setActiveConversationId={setActiveConversationId}
+          pendingRequests={<PendingConnectionRequests user={user} connections={user.role === "mentor" ? connections.filter((connection) => connection.status === "pending" && connection.mentor_id === user.id) : connections.filter((connection) => connection.status === "pending" && connection.student_id === user.id)} onAcceptConnection={handleAcceptConnection} />}
+          onSendMessage={handleSendMessage}
+          onMarkRead={handleMarkConversationRead}
+          onUpdateState={handleUpdateConversationState}
+          setActiveView={setActiveView}
+        />
+      )}
       {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} token={token} user={user} setActiveView={setActiveView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} onReviewsChange={refreshMentorData} />}
       {activeView === "my-profile" && <UserProfile user={user} token={token} setActiveView={setActiveView} onSaveProfile={handleSaveProfile} onAvailabilityChange={handleAvailabilityChange} onVerificationChange={handleVerificationChange} />}
     </AppShell>
@@ -439,7 +541,7 @@ function Dashboard({
   const acceptedConnections = connections.filter((connection) => connection.status === "accepted");
   const pendingForMentor = connections.filter((connection) => connection.status === "pending" && connection.mentor_id === user.id);
   const pendingForStudent = connections.filter((connection) => connection.status === "pending" && connection.student_id === user.id);
-  const unreadConversations = conversations.filter((conversation) => conversation.messages.at(-1)?.sender_id !== user.id);
+  const unreadConversations = conversations.filter((conversation) => conversation.unread_count > 0);
   const completion = profileCompletion(user);
   const relatedPosts = questions
     .filter((question) => {
@@ -1135,82 +1237,6 @@ function UserProfile({
           </Panel>
         </aside>
       </div>
-    </section>
-  );
-}
-
-function Messages({
-  user,
-  connections,
-  conversations,
-  activeConversationId,
-  setActiveConversationId,
-  onAcceptConnection,
-  onSendMessage,
-  setActiveView,
-}: {
-  user: User;
-  connections: Connection[];
-  conversations: Conversation[];
-  activeConversationId: string;
-  setActiveConversationId: (id: string) => void;
-  onAcceptConnection: (connectionId: string) => void;
-  onSendMessage: (conversationId: string, body: string) => Promise<void>;
-  setActiveView: (view: View) => void;
-}) {
-  const [message, setMessage] = useState("Thanks, I would like to know more about your experience.");
-  const active = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
-  const pendingForMentor = connections.filter((connection) => connection.status === "pending" && connection.mentor_id === user.id);
-  const pendingForStudent = connections.filter((connection) => connection.status === "pending" && connection.student_id === user.id);
-
-  async function submitMessage() {
-    if (!active || !message.trim()) return;
-    await onSendMessage(active.id, message);
-    setMessage("");
-  }
-
-  if (!conversations.length) {
-    return (
-      <section className="space-y-6 p-8">
-        <PendingConnectionRequests user={user} connections={user.role === "mentor" ? pendingForMentor : pendingForStudent} onAcceptConnection={onAcceptConnection} />
-        <Panel title="Messages">
-          <p className="font-medium text-[#737b8f]">No accepted conversations yet. Students must request a connection and mentors must accept before messaging starts.</p>
-          <button className="mt-4 h-11 rounded-xl bg-nusPurple px-6 font-bold text-white" onClick={() => setActiveView("find")}>Find mentors</button>
-        </Panel>
-      </section>
-    );
-  }
-
-  return (
-    <section className="grid grid-cols-[330px_1fr] gap-7 p-8 max-xl:grid-cols-1">
-      <div className="space-y-6">
-        <PendingConnectionRequests user={user} connections={user.role === "mentor" ? pendingForMentor : pendingForStudent} onAcceptConnection={onAcceptConnection} />
-        <Panel title="Conversations">
-          <div className="space-y-3">
-            {conversations.map((conversation) => (
-              <button key={conversation.id} className={`w-full rounded-xl border p-4 text-left ${active?.id === conversation.id ? "border-nusPurple bg-[#f3f0ff]" : "border-[#d4dae8] bg-white"}`} onClick={() => setActiveConversationId(conversation.id)}>
-                <p className="font-black">{conversation.mentor_name}</p>
-                <p className="text-sm font-medium text-[#737b8f]">{conversation.mentor_programme}</p>
-                <p className="mt-2 truncate text-sm text-[#596173]">{conversation.last_message}</p>
-              </button>
-            ))}
-          </div>
-        </Panel>
-      </div>
-      <Panel title={active ? `Chat with ${active.mentor_name}` : "Messages"}>
-        <div className="space-y-3">
-          {active?.messages.map((item) => (
-            <div key={item.id} className={`max-w-[75%] rounded-2xl p-4 ${item.sender_id === user.id ? "ml-auto bg-nusPurple text-white" : "bg-[#f3f5fb] text-[#1f2333]"}`}>
-              <p className="text-xs font-black uppercase opacity-75">{item.sender_name}</p>
-              <p className="mt-1 font-medium">{item.body}</p>
-            </div>
-          ))}
-        </div>
-        <div className="mt-5 flex gap-3 max-md:flex-col">
-          <input className="field" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Write a message" />
-          <button className="h-14 rounded-xl bg-nusPurple px-6 font-bold text-white" onClick={submitMessage}>Send</button>
-        </div>
-      </Panel>
     </section>
   );
 }
