@@ -32,6 +32,7 @@ from .models import (
     ConversationRecord,
     MentorAvailabilityRecord,
     MessageRecord,
+    NotificationRecord,
     ProfileEmbeddingRecord,
     QuestionRecord,
     ReviewRecord,
@@ -48,6 +49,11 @@ from .qa_archive import (
 
 
 Role = Literal["student", "mentor"]
+NotificationType = Literal[
+    "message",
+    "question_created",
+    "answer_created",
+]
 MentorType = Literal["senior", "alumni", "professor", "nus_staff", "other"]
 VerificationStatus = Literal[
     "not_applicable", "unverified", "pending", "verified", "rejected"
@@ -373,6 +379,25 @@ class ConversationStateUpdate(BaseModel):
     is_muted: bool | None = None
 
 
+class NotificationPublic(BaseModel):
+    id: str
+    user_id: str
+    actor_id: str | None = None
+    actor_name: str
+    type: NotificationType
+    title: str
+    body: str
+    target_type: str
+    target_id: str
+    is_read: bool
+    read_at: str | None = None
+    created_at: str
+
+
+class NotificationUnreadCount(BaseModel):
+    unread_count: int
+
+
 class ConnectionPublic(BaseModel):
     id: str
     student_id: str
@@ -552,6 +577,58 @@ def conversation_from_record(
         is_muted=conversation_flag(record, role, "muted") if role else False,
         messages=[message_from_record(message) for message in record.messages],
     )
+
+
+def notification_from_record(record: NotificationRecord) -> NotificationPublic:
+    return NotificationPublic(
+        id=record.id,
+        user_id=record.user_id,
+        actor_id=record.actor_id,
+        actor_name=record.actor_name,
+        type=record.type,  # type: ignore[arg-type]
+        title=record.title,
+        body=record.body,
+        target_type=record.target_type,
+        target_id=record.target_id,
+        is_read=record.is_read,
+        read_at=record.read_at.isoformat() if record.read_at else None,
+        created_at=record.created_at.isoformat(),
+    )
+
+
+def create_notification(
+    db: Session,
+    *,
+    user_id: str,
+    actor: UserRecord,
+    notification_type: NotificationType,
+    title: str,
+    body: str,
+    target_type: str,
+    target_id: str,
+) -> NotificationRecord | None:
+    if user_id == actor.id:
+        return None
+    notification = NotificationRecord(
+        id=f"n_{uuid4().hex[:10]}",
+        user_id=user_id,
+        actor_id=actor.id,
+        actor_name=actor.name,
+        type=notification_type,
+        title=title[:255],
+        body=body,
+        target_type=target_type,
+        target_id=target_id,
+    )
+    db.add(notification)
+    return notification
+
+
+def truncate_notification_body(value: str, limit: int = 180) -> str:
+    collapsed = " ".join(value.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 3].rstrip()}..."
 
 
 def connection_from_record(record: ConnectionRecord) -> ConnectionPublic:
@@ -1713,6 +1790,18 @@ def create_question(
         ),
     )
     db.add(question)
+    mentors = db.scalars(select(UserRecord).where(UserRecord.role == "mentor")).all()
+    for mentor in mentors:
+        create_notification(
+            db,
+            user_id=mentor.id,
+            actor=user,
+            notification_type="question_created",
+            title=f"New Q&A question: {question.title}",
+            body=truncate_notification_body(question.body),
+            target_type="question",
+            target_id=question.id,
+        )
     db.commit()
     db.refresh(question)
     return question_from_record(question)
@@ -1747,6 +1836,16 @@ def answer_question(
         summary_version=SUMMARY_VERSION,
     )
     db.add(answer)
+    create_notification(
+        db,
+        user_id=question.student_id,
+        actor=user,
+        notification_type="answer_created",
+        title=f"{user.name} answered your question",
+        body=truncate_notification_body(answer.summary),
+        target_type="question",
+        target_id=question.id,
+    )
     db.flush()
     question.key_terms = extract_key_terms(
         question.topic,
@@ -1764,6 +1863,77 @@ def answer_question(
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Question not found")
     return question_from_record(refreshed)
+
+
+@app.get("/notifications", response_model=list[NotificationPublic])
+def list_notifications(
+    unread_only: bool = False,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[NotificationPublic]:
+    user = get_user_from_token(authorization, db)
+    statement = select(NotificationRecord).where(NotificationRecord.user_id == user.id)
+    if unread_only:
+        statement = statement.where(NotificationRecord.is_read.is_(False))
+    statement = statement.order_by(NotificationRecord.created_at.desc()).limit(100)
+    records = db.scalars(statement).all()
+    return [notification_from_record(record) for record in records]
+
+
+@app.get("/notifications/unread-count", response_model=NotificationUnreadCount)
+def notification_unread_count(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> NotificationUnreadCount:
+    user = get_user_from_token(authorization, db)
+    count = db.scalar(
+        select(func.count(NotificationRecord.id)).where(
+            NotificationRecord.user_id == user.id,
+            NotificationRecord.is_read.is_(False),
+        )
+    )
+    return NotificationUnreadCount(unread_count=int(count or 0))
+
+
+@app.post("/notifications/{notification_id}/read", response_model=NotificationPublic)
+def mark_notification_read(
+    notification_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> NotificationPublic:
+    user = get_user_from_token(authorization, db)
+    notification = db.get(NotificationRecord, notification_id)
+    if notification is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if notification.user_id != user.id:
+        raise HTTPException(
+            status_code=403, detail="You cannot update this notification"
+        )
+    notification.is_read = True
+    notification.read_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(notification)
+    return notification_from_record(notification)
+
+
+@app.post("/notifications/read-all", response_model=NotificationUnreadCount)
+def mark_all_notifications_read(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> NotificationUnreadCount:
+    user = get_user_from_token(authorization, db)
+    now = datetime.now(timezone.utc)
+    records = db.scalars(
+        select(NotificationRecord).where(
+            NotificationRecord.user_id == user.id,
+            NotificationRecord.is_read.is_(False),
+        )
+    ).all()
+    for notification in records:
+        notification.is_read = True
+        notification.read_at = now
+    db.commit()
+    return NotificationUnreadCount(unread_count=0)
 
 
 @app.get("/conversations", response_model=list[ConversationPublic])
@@ -1917,6 +2087,20 @@ def send_message(
     set_conversation_last_read_at(conversation, role, now)
     set_conversation_flag(conversation, role, "archived", False)
     set_conversation_flag(conversation, recipient_role, "archived", False)
+    recipient_id = (
+        conversation.mentor_id if recipient_role == "mentor" else conversation.student_id
+    )
+    if not conversation_flag(conversation, recipient_role, "muted"):
+        create_notification(
+            db,
+            user_id=recipient_id,
+            actor=user,
+            notification_type="message",
+            title=f"New message from {user.name}",
+            body=truncate_notification_body(message.body),
+            target_type="conversation",
+            target_id=conversation.id,
+        )
     db.commit()
     refreshed = db.scalar(
         select(ConversationRecord)

@@ -313,6 +313,34 @@ class MessageRecord(Base):
     conversation: Mapped[ConversationRecord] = relationship(back_populates="messages")
 
 
+class NotificationRecord(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    actor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    target_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+    user: Mapped[UserRecord] = relationship(foreign_keys=[user_id])
+    actor: Mapped[UserRecord | None] = relationship(foreign_keys=[actor_id])
+
+
 class ProfileEmbeddingRecord(Base):
     __tablename__ = "profile_embeddings"
 
@@ -368,4 +396,10 @@ Index(
     "ix_profile_embeddings_user_type",
     ProfileEmbeddingRecord.user_id,
     ProfileEmbeddingRecord.embedding_type,
+)
+Index(
+    "ix_notifications_user_read_created",
+    NotificationRecord.user_id,
+    NotificationRecord.is_read,
+    NotificationRecord.created_at,
 )
