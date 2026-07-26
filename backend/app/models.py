@@ -294,6 +294,44 @@ class ReviewRecord(Base):
     mentor: Mapped[UserRecord] = relationship(foreign_keys=[mentor_id])
 
 
+class OpportunityRecord(Base):
+    __tablename__ = "opportunities"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    poster_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    poster_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    poster_role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    organisation: Mapped[str] = mapped_column(String(255), nullable=False, default="NUS")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    faculty: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    commitment: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    start_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    end_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    deadline: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    application_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_years: Mapped[list[str]] = mapped_column(JsonList, default=list, nullable=False)
+    relevant_majors: Mapped[list[str]] = mapped_column(JsonList, default=list, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JsonList, default=list, nullable=False)
+    skills: Mapped[list[str]] = mapped_column(JsonList, default=list, nullable=False)
+    details: Mapped[list[str]] = mapped_column(JsonList, default=list, nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    poster: Mapped[UserRecord] = relationship()
+
+
 class MessageRecord(Base):
     __tablename__ = "messages"
 
@@ -392,6 +430,8 @@ Index(
     MentorAvailabilityRecord.day_of_week,
 )
 Index("ix_reviews_mentor_created", ReviewRecord.mentor_id, ReviewRecord.created_at)
+Index("ix_opportunities_category_created", OpportunityRecord.category, OpportunityRecord.created_at)
+Index("ix_opportunities_verified_created", OpportunityRecord.is_verified, OpportunityRecord.created_at)
 Index(
     "ix_profile_embeddings_user_type",
     ProfileEmbeddingRecord.user_id,

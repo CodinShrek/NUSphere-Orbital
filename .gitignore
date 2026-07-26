@@ -18,6 +18,7 @@ out/
 # Local env
 .env
 .env.local
+.supabase-jwks.json
 
 # Generated local deliverables
 outputs/

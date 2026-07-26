@@ -3,12 +3,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+import logging
+import json
 from typing import Any
 
 import jwt
 from fastapi import HTTPException
 from jwt import PyJWKClient
 from jwt.exceptions import ExpiredSignatureError, PyJWTError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,26 @@ def get_jwks_client(jwks_url: str) -> PyJWKClient:
     return PyJWKClient(jwks_url, cache_keys=True)
 
 
+def local_jwks_path() -> str:
+    return os.getenv("SUPABASE_JWKS_FILE", ".supabase-jwks.json").strip()
+
+
+def signing_key_from_local_jwks(token: str) -> Any | None:
+    path = local_jwks_path()
+    if not path or not os.path.exists(path):
+        return None
+
+    header = jwt.get_unverified_header(token)
+    key_id = header.get("kid")
+    with open(path, encoding="utf-8") as file:
+        jwks = json.load(file)
+    for key in jwks.get("keys", []):
+        if key_id and key.get("kid") != key_id:
+            continue
+        return jwt.PyJWK.from_dict(key).key
+    return None
+
+
 def verify_supabase_token(token: str) -> SupabaseClaims:
     supabase_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     if not supabase_url:
@@ -53,12 +77,14 @@ def verify_supabase_token(token: str) -> SupabaseClaims:
     )
 
     try:
-        signing_key = get_jwks_client(
-            f"{issuer}/.well-known/jwks.json"
-        ).get_signing_key_from_jwt(token)
+        signing_key = signing_key_from_local_jwks(token)
+        if signing_key is None:
+            signing_key = get_jwks_client(
+                f"{issuer}/.well-known/jwks.json"
+            ).get_signing_key_from_jwt(token).key
         payload: dict[str, Any] = jwt.decode(
             token,
-            signing_key.key,
+            signing_key,
             algorithms=["RS256", "ES256"],
             audience=audience,
             issuer=issuer,
@@ -67,9 +93,11 @@ def verify_supabase_token(token: str) -> SupabaseClaims:
     except ExpiredSignatureError as exc:
         raise _unauthorized("Auth token has expired") from exc
     except PyJWTError as exc:
+        logger.warning("Supabase JWT validation failed: %s", exc)
         raise _unauthorized("Invalid auth token") from exc
     except Exception as exc:
         # PyJWKClient raises several non-PyJWT network/key lookup exceptions.
+        logger.warning("Supabase JWKS validation failed: %s", exc)
         raise _unauthorized("Unable to validate auth token") from exc
 
     user_id = payload.get("sub")

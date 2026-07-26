@@ -1,40 +1,19 @@
 # NUSphere
 
-NUSphere is a mentorship matching web application for NUS students. The idea is to help students find seniors, professors, and experienced peers who are relevant to their academic goals, interests, CCAs, research plans, exchange/NOC plans, and other pathways through university.
+NUSphere is a mentorship, Q&A, messaging and opportunity-discovery web app for NUS students. It helps students find relevant mentors, ask archived university questions, message connected mentors, review guidance quality, and discover personalised events, CCAs, projects, research openings and other campus opportunities.
 
-This repository contains the NUSphere MVP work. The app now keeps the core full-stack flow working with persistent backend storage: users can sign up or log in, the frontend talks to the backend, profile information is saved in a database, and mentor recommendations are returned based on user interests and goals.
+## Current Feature Set
 
-## Live Demo
-
-Frontend:
-
-```text
-https://nusphere-sigma.vercel.app
-```
-
-Backend health check:
-
-```text
-https://nusphere-production-c2e3.up.railway.app/health
-```
-
-Demo account:
-
-```text
-Email: studentid@u.nus.edu
-Password: password123
-```
-
-## What Is Implemented
-
-- Student and mentor login/register flow
-- User profile page populated with information entered during sign up
-- Home page greeting that uses the logged-in user's name
-- Logout flow connected to the backend
-- Basic mentor recommendation endpoint
-- Mentor listing and mentor profile screens
-- Frontend-backend integration through FastAPI endpoints
-- UI based on the provided NUSphere mockups
+- Supabase Auth signup, login, session restoration and logout
+- Student and mentor profile sync into the backend database
+- Mentor discovery with standard search, complete-profile AI matching and typed-goal-only AI goal matching
+- Transparent match percentages, score breakdowns, provider metadata and match reasoning
+- Mentor verification requests, structured availability and connection-based reviews
+- Q&A archive with topic clusters, duplicate suggestions, answer summaries and notifications
+- Connection-based messaging with per-user unread counts, mark-read, pin, archive and mute controls
+- Notification panel with unread count, mark one read and mark all read
+- Personalised For You opportunities page with posting, editing owned posts, verified mentor posts, unverified student posts and three matching modes
+- Backend regression tests, frontend utility tests and GitHub Actions CI
 
 ## Tech Stack
 
@@ -43,44 +22,49 @@ Frontend:
 - Next.js 14
 - TypeScript
 - Tailwind CSS
+- Supabase JavaScript client
 
 Backend:
 
-- Python
 - FastAPI
-- Pydantic
 - SQLAlchemy
-- PostgreSQL-compatible database through `DATABASE_URL`
-- SQLite fallback for local development
+- Alembic
+- SQLite for local development
+- PostgreSQL-compatible `DATABASE_URL` for production
+- Supabase JWT validation
+- OpenAI embeddings with deterministic local fallback
 
 Deployment:
 
 - Vercel for the frontend
 - Railway for the backend
-
-Planned production services:
-
-- Supabase PostgreSQL or Railway PostgreSQL for persistent storage
 - Supabase Auth
-- Supabase Realtime for future messaging
-- OpenAI embeddings with deterministic local fallback for mentor recommendations
-- OpenRouter for the future AI assistant
+- Supabase Postgres or Railway Postgres for production persistence
 
 ## Project Structure
 
 ```text
 .
 |-- backend
+|   |-- alembic
 |   |-- app
-|   |   `-- main.py
+|   |-- scripts
+|   |-- tests
+|   |-- .env.example
 |   |-- requirements.txt
 |   |-- railway.json
 |   `-- Procfile
 |-- frontend
 |   |-- app
+|   |-- components
+|   |-- data
 |   |-- lib
+|   |-- tests
+|   |-- types
+|   |-- .env.example
 |   |-- package.json
 |   `-- vercel.json
+|-- .github/workflows/ci.yml
 |-- Dockerfile
 |-- DEPLOYMENT.md
 `-- README.md
@@ -88,10 +72,11 @@ Planned production services:
 
 ## Local Setup
 
-Run the backend:
+Create backend environment:
 
 ```powershell
 cd backend
+Copy-Item .env.example .env
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -99,10 +84,11 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
-Run the frontend in another terminal:
+Create frontend environment in another terminal:
 
 ```powershell
 cd frontend
+Copy-Item .env.example .env.local
 npm install
 npm run dev
 ```
@@ -113,17 +99,11 @@ Open:
 http://localhost:3000
 ```
 
+For the alternate local production server used during testing, run the frontend on `http://127.0.0.1:3001` and include that origin in `FRONTEND_ORIGINS`.
+
 ## Environment Variables
 
-Frontend:
-
-```text
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_OR_PUBLISHABLE_KEY
-```
-
-Backend:
+Backend values belong in `backend/.env` or Railway:
 
 ```text
 FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
@@ -140,65 +120,87 @@ MATCH_WEIGHT_FACULTY=0.10
 MATCH_WEIGHT_COMPLETENESS=0.10
 ```
 
-For the deployed version, `NEXT_PUBLIC_API_URL` should point to the Railway backend URL, `FRONTEND_ORIGINS` should include the Vercel frontend URL, `DATABASE_URL` should point to the managed PostgreSQL database connection string, and `SUPABASE_URL` should identify the Supabase project that issues access tokens.
+Frontend values belong in `frontend/.env.local` or Vercel:
 
-`OPENAI_API_KEY` is optional for local development. When it is present, the backend requests `text-embedding-3-small` vectors from OpenAI and stores the configured model and dimensions with each cached profile embedding. When it is absent, matching uses a deterministic local vector fallback. The four `MATCH_WEIGHT_*` values must be non-negative and add up to `1.0`. Set `OPENAI_EMBEDDING_FALLBACK_ON_ERROR=false` when an OpenAI provider failure should stop an AI match instead of temporarily using the local fallback.
-
-After adding a private API key to `backend/.env`, verify the real provider without changing application data:
-
-```powershell
-cd backend
-python scripts/check_openai_embeddings.py
+```text
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
 ```
 
-## Authentication
+Never expose a Supabase service-role key through the frontend or configure it for this backend. The backend validates Supabase user access tokens through the project's JWKS endpoint and does not need service-role access.
 
-The frontend uses Supabase Auth for signup, password login, persistent session restoration, automatic token refresh, and logout. The backend validates Supabase access-token signatures, issuer, audience, expiry, and subject against the project's JWKS endpoint. After Supabase signup, the frontend sends the access token as `Authorization: Bearer <token>` to `PUT /auth/profile`; this creates the application profile or synchronizes the existing profile. Email comes from the signed token rather than the request body, and an account's student/mentor role cannot be changed after creation.
+## Database
 
-When email confirmation is enabled, the browser temporarily stores the pending profile form until the confirmed user returns and a Supabase session is available. It removes that pending data immediately after a successful profile synchronization. Never expose a Supabase service-role key through a `NEXT_PUBLIC_` variable.
+The backend stores app data with SQLAlchemy models and Alembic migrations. Local development defaults to `backend/nusphere.db`; production should use a PostgreSQL URL.
 
-Existing local profiles are linked by matching the authenticated Supabase email. Keep Supabase email confirmation enabled before migrating real accounts so an email address must be verified before it can claim an existing profile. The backend does not need a Supabase service-role key.
+Core tables include:
 
-## Database Storage
+- `users`
+- `questions`
+- `answers`
+- `connections`
+- `conversations`
+- `messages`
+- `notifications`
+- `reviews`
+- `mentor_availability`
+- `profile_embeddings`
+- `opportunities`
 
-The backend stores application data through SQLAlchemy tables instead of in-memory dictionaries.
-
-- `users`: Supabase user identity, student and mentor profiles, profile pictures, interests, goals, mentor type fields, and profile edits
-- `sessions`: retained temporarily for migration compatibility; no longer used for authentication
-- `questions`: Q&A posts, knowledge archive tags, attachment names, and generated key terms
-- `answers`: mentor responses and archive summaries
-- `conversations`: student-mentor chat threads
-- `connections`: pending and accepted mentor-student connection requests
-- `messages`: individual chat messages
-- `profile_embeddings`: cached semantic profile vectors and embedding model metadata
-
-Local development uses `sqlite:///./nusphere.db` if `DATABASE_URL` is not set. Deployment should use a PostgreSQL URL from Supabase or Railway. Alembic owns the database schema; run `alembic upgrade head` from `backend/` after pulling schema changes and before starting the API.
-
-After changing `backend/app/models.py`, create and review a migration:
+Run migrations after pulling schema changes:
 
 ```powershell
 cd backend
-alembic revision --autogenerate -m "describe the schema change"
 alembic upgrade head
 ```
 
-## Current Limitations
+Create a reviewed migration after changing models:
 
-This is still an MVP-stage system.
-- Mentor matching combines OpenAI semantic similarity, structured profile overlap, faculty alignment, and profile completeness. Without an OpenAI key it uses a deterministic local embedding fallback.
-- The broader AI assistant is still a future feature.
+```powershell
+cd backend
+alembic revision --autogenerate -m "describe schema change"
+alembic upgrade head
+```
 
-## Next Steps
+## Matching Behavior
 
-For Milestone 2, the main improvements should be:
+Mentor and opportunity discovery each support three modes:
 
-- Connect Supabase Auth
-- Expand mentor profiles and recommendation data
-- Add the Q&A platform
-- Start the communication system
-- Improve mentor matching with embeddings
-- Add tests for auth, profile, and recommendation flows
+- Standard search: meaningful keyword matching with stopword filtering and structured terms
+- AI profile search: semantic fit using the student's full saved profile plus structured overlap
+- AI goal search: semantic and term fit based only on the typed goal text
+
+When `OPENAI_API_KEY` is absent, the backend uses deterministic local embeddings so the app remains testable. Set `OPENAI_EMBEDDING_FALLBACK_ON_ERROR=false` if production should fail AI requests when OpenAI is configured but unavailable.
+
+## Quality Checks
+
+Backend:
+
+```powershell
+cd backend
+python -m unittest discover -s tests
+python scripts\check_production_readiness.py
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm test
+npm run typecheck
+npm run build
+```
+
+Runtime checks:
+
+```text
+GET /health
+GET /readiness
+```
+
+`/health` confirms the API process is alive. `/readiness` checks database connectivity, Alembic revision, Supabase auth configuration, explicit CORS origins and matching configuration without exposing secrets.
 
 ## Deployment
 
-Deployment details are in [DEPLOYMENT.md](DEPLOYMENT.md).
+Deployment instructions are in [DEPLOYMENT.md](DEPLOYMENT.md).

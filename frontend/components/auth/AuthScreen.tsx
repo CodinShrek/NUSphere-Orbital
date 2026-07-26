@@ -30,6 +30,66 @@ type AuthScreenProps = {
   onAuthenticated: (response: AuthenticatedSession) => void;
 };
 
+function appendCommaValue(current: string, value: string) {
+  const parts = current
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.includes(value)) parts.push(value);
+  return parts.join(", ");
+}
+
+function MultiSuggestInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  list,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  list: string;
+  options: string[];
+}) {
+  const query = value.split(",").at(-1)?.trim().toLowerCase() ?? "";
+  const suggestions = options
+    .filter((option) => option.toLowerCase().includes(query))
+    .slice(0, 12);
+
+  return (
+    <label className="block text-sm font-bold text-[#3f4659]">
+      {label}
+      <input
+        className="field mt-2"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        list={list}
+      />
+      {suggestions.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {suggestions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              className="rounded-full border border-[#d4dae8] bg-white px-3 py-1.5 text-xs font-bold text-[#596173] transition hover:border-nusPurple hover:text-nusPurple"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onChange(appendCommaValue(value, option));
+              }}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+    </label>
+  );
+}
+
 export function AuthScreen({
   error,
   onError,
@@ -384,25 +444,28 @@ export function AuthScreen({
                       onChange={setModulesTaken}
                       placeholder="CS1010, MA1521, GET1029"
                     />
-                    <TextInput
+                    <MultiSuggestInput
                       label="CCAs, clubs, or organisations"
                       value={ccaText}
                       onChange={setCcaText}
                       list="cca-options"
+                      options={ccas}
                       placeholder="Start typing a NUS club, or type your own"
                     />
-                    <TextInput
+                    <MultiSuggestInput
                       label="Other NUS opportunities"
                       value={opportunityText}
                       onChange={setOpportunityText}
                       list="opportunity-options"
+                      options={opportunities}
                       placeholder="NOC, UROP, startup programmes..."
                     />
-                    <TextInput
+                    <MultiSuggestInput
                       label="Exchange universities"
                       value={exchangeText}
                       onChange={setExchangeText}
                       list="exchange-options"
+                      options={exchangeUniversities}
                       placeholder="Start typing partner universities, or type Other"
                     />
                     <label className="block text-sm font-bold text-[#3f4659]">
@@ -443,11 +506,12 @@ export function AuthScreen({
                       onChange={setOrganisation}
                       placeholder="Company, university, startup, or organisation"
                     />
-                    <TextInput
+                    <MultiSuggestInput
                       label="NUS experiences you can advise on"
                       value={opportunityText}
                       onChange={setOpportunityText}
                       list="opportunity-options"
+                      options={opportunities}
                       placeholder="NOC, UROP, exchange, internships..."
                     />
                   </>

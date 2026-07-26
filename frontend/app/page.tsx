@@ -10,6 +10,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MessagingCenter } from "@/components/messaging/MessagingCenter";
 import { FindMentors } from "@/components/mentors/FindMentors";
 import { MentorProfile } from "@/components/mentors/MentorProfile";
+import { ForYou } from "@/components/opportunities/ForYou";
 import { UserProfile } from "@/components/profile/UserProfile";
 import { QAArchive } from "@/components/qa/QAArchive";
 import {
@@ -20,6 +21,8 @@ import {
   fetchConnections,
   fetchNotificationUnreadCount,
   fetchNotifications,
+  fetchOpportunities,
+  fetchOpportunityRecommendations,
   fetchQuestions,
   fetchRecommendations,
   markAllNotificationsRead,
@@ -42,6 +45,7 @@ import type {
   DuplicateQuestionSuggestion,
   Mentor,
   Notification,
+  Opportunity,
   Question,
   User,
   VerificationStatus,
@@ -56,12 +60,14 @@ export default function Home() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationError, setNotificationError] = useState("");
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeView, setActiveView] = useState<View>("home");
   const [selectedMentorId, setSelectedMentorId] = useState("");
+  const [mentorProfileReturnView, setMentorProfileReturnView] = useState<View>("find");
   const [error, setError] = useState("");
   const [authLoading, setAuthLoading] = useState(true);
   const authAttempt = useRef(0);
@@ -88,6 +94,7 @@ export default function Home() {
       setConnections([]);
       setConversations([]);
       setNotifications([]);
+      setOpportunities([]);
       setNotificationUnreadCount(0);
       setActiveConversationId("");
       setActiveView("home");
@@ -137,8 +144,14 @@ export default function Home() {
       },
     );
 
-    void supabase.auth
-      .getSession()
+    const sessionTimeout = new Promise<never>((_, reject) => {
+      window.setTimeout(
+        () => reject(new Error("Supabase session restore timed out. Please sign in again.")),
+        6000,
+      );
+    });
+
+    void Promise.race([supabase.auth.getSession(), sessionTimeout])
       .then(({ data, error: sessionError }) => {
         if (sessionError) throw sessionError;
         return restoreSession(data.session);
@@ -170,6 +183,17 @@ export default function Home() {
       .then(setQuestions)
       .catch((err: Error) => setError(err.message));
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const opportunityRequest =
+      user.role === "student" && token
+        ? fetchOpportunityRecommendations(token)
+        : fetchOpportunities();
+    opportunityRequest
+      .then(setOpportunities)
+      .catch((err: Error) => setError(err.message));
+  }, [token, user]);
 
   useEffect(() => {
     if (!token) return;
@@ -213,6 +237,7 @@ export default function Home() {
       setConnections([]);
       setConversations([]);
       setNotifications([]);
+      setOpportunities([]);
       setNotificationUnreadCount(0);
       setActiveConversationId("");
       setActiveView("home");
@@ -336,6 +361,7 @@ export default function Home() {
     try {
       const updated = await updateProfile(token, payload);
       setUser(updated);
+      setMentors(await fetchRecommendations(updated));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to update profile");
       throw err;
@@ -377,8 +403,9 @@ export default function Home() {
     }
   }
 
-  function handleOpenMentorProfile(mentorId: string) {
+  function handleOpenMentorProfile(mentorId: string, returnView: View = "find") {
     setSelectedMentorId(mentorId);
+    setMentorProfileReturnView(returnView);
     setActiveView("mentor-profile");
   }
 
@@ -414,8 +441,9 @@ export default function Home() {
       onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
       onLogout={handleLogout}
     >
-      {activeView === "home" && <Dashboard user={user} questions={questions} connections={connections} conversations={conversations} setActiveView={setActiveView} onAcceptConnection={handleAcceptConnection} />}
+      {activeView === "home" && <Dashboard user={user} questions={questions} connections={connections} conversations={conversations} setActiveView={setActiveView} onOpenMentorProfile={(mentorId) => handleOpenMentorProfile(mentorId, "home")} onAcceptConnection={handleAcceptConnection} />}
       {activeView === "find" && <FindMentors mentors={mentors} connections={connections} token={token} user={user} onOpenMentorProfile={handleOpenMentorProfile} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} />}
+      {activeView === "opportunities" && <ForYou user={user} token={token} initialOpportunities={opportunities} onOpportunitiesChange={setOpportunities} />}
       {activeView === "qa" && <QAArchive user={user} questions={questions} onCreateQuestion={handleCreateQuestion} onAnswerQuestion={handleAnswerQuestion} onSuggestDuplicates={handleSuggestDuplicateQuestions} />}
       {activeView === "messages" && (
         <MessagingCenter
@@ -430,7 +458,7 @@ export default function Home() {
           setActiveView={setActiveView}
         />
       )}
-      {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} token={token} user={user} setActiveView={setActiveView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} onReviewsChange={refreshMentorData} />}
+      {activeView === "mentor-profile" && <MentorProfile mentor={selectedMentor} connection={connections.find((item) => item.mentor_id === selectedMentor?.id || item.student_id === selectedMentor?.id)} token={token} user={user} setActiveView={setActiveView} returnView={mentorProfileReturnView} onRequestConnection={handleRequestConnection} onStartConversation={handleStartConversation} onReviewsChange={refreshMentorData} />}
       {activeView === "my-profile" && <UserProfile user={user} token={token} setActiveView={setActiveView} onSaveProfile={handleSaveProfile} onAvailabilityChange={handleAvailabilityChange} onVerificationChange={handleVerificationChange} />}
     </AppShell>
   );

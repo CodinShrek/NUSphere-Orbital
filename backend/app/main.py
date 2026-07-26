@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time, timezone
+from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 from pydantic import BaseModel, EmailStr, Field, StringConstraints, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from .auth import claims_from_authorization
 from .database import get_db
@@ -21,6 +25,7 @@ from .ai_matching import (
     goal_search_text,
     match_explanation,
     matching_weights,
+    STOP_WORDS,
     profile_completeness,
     structured_overlap,
     user_profile_text,
@@ -33,6 +38,7 @@ from .models import (
     MentorAvailabilityRecord,
     MessageRecord,
     NotificationRecord,
+    OpportunityRecord,
     ProfileEmbeddingRecord,
     QuestionRecord,
     ReviewRecord,
@@ -46,6 +52,7 @@ from .qa_archive import (
     summarise_answer,
     topic_cluster,
 )
+from .readiness import readiness_report
 
 
 Role = Literal["student", "mentor"]
@@ -62,6 +69,7 @@ Weekday = Literal[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
 ]
 AvailabilityMode = Literal["online", "in_person", "hybrid"]
+OpportunityCategory = Literal["event", "cca", "project", "research", "other"]
 QuestionTitle = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=5, max_length=500)
 ]
@@ -284,6 +292,7 @@ class Mentor(BaseModel):
 class RecommendationRequest(BaseModel):
     interests: list[str] = Field(default_factory=list)
     goals: list[str] = Field(default_factory=list)
+    bio: str = ""
     faculty: str | None = None
     minimum_score: int = 0
 
@@ -291,6 +300,70 @@ class RecommendationRequest(BaseModel):
 class GoalSearchRequest(BaseModel):
     query: str = Field(min_length=20)
     minimum_score: int = 0
+
+
+class OpportunityCreate(BaseModel):
+    category: OpportunityCategory
+    title: str = Field(min_length=5, max_length=255)
+    organisation: str = Field(default="NUS", min_length=2, max_length=255)
+    summary: str = Field(min_length=10, max_length=500)
+    description: str = Field(min_length=30, max_length=5000)
+    faculty: str | None = Field(default=None, max_length=255)
+    location: str | None = Field(default=None, max_length=255)
+    commitment: str | None = Field(default=None, max_length=255)
+    start_date: str | None = Field(default=None, max_length=40)
+    end_date: str | None = Field(default=None, max_length=40)
+    deadline: str | None = Field(default=None, max_length=40)
+    application_url: str | None = Field(default=None, max_length=1000)
+    contact_email: str | None = Field(default=None, max_length=255)
+    target_years: list[str] = Field(default_factory=list, max_length=8)
+    relevant_majors: list[str] = Field(default_factory=list, max_length=12)
+    tags: list[str] = Field(default_factory=list, max_length=16)
+    skills: list[str] = Field(default_factory=list, max_length=16)
+    details: list[str] = Field(default_factory=list, max_length=16)
+
+
+class OpportunitySearchRequest(BaseModel):
+    query: str = ""
+    categories: list[OpportunityCategory] = Field(default_factory=list)
+    minimum_score: int = 0
+
+
+class OpportunityPublic(BaseModel):
+    id: str
+    poster_id: str
+    poster_name: str
+    poster_role: Role
+    category: OpportunityCategory
+    title: str
+    organisation: str
+    summary: str
+    description: str
+    faculty: str | None = None
+    location: str | None = None
+    commitment: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    deadline: str | None = None
+    application_url: str | None = None
+    contact_email: str | None = None
+    target_years: list[str] = Field(default_factory=list)
+    relevant_majors: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    details: list[str] = Field(default_factory=list)
+    is_verified: bool
+    created_at: str
+    match_score: int = 0
+    keyword_match_score: int | None = None
+    profile_match_score: int | None = None
+    goal_match_score: int | None = None
+    match_label: str = "Keyword match"
+    match_reasons: list[str] = Field(default_factory=list)
+    match_score_breakdown: MatchScoreBreakdown | None = None
+    embedding_model: str | None = None
+    embedding_provider: Literal["openai", "local"] | None = None
+    embedding_fallback: bool | None = None
 
 
 class QuestionSuggestionRequest(BaseModel):
@@ -732,54 +805,190 @@ def keyword_term_matches(term: str, candidate: str) -> bool:
     return singular_keyword(normalised_term) in candidate_tokens
 
 
-def score_mentor(mentor: Mentor, request: RecommendationRequest) -> int:
-    query_terms = [term for term in request.interests + request.goals if term]
-    mentor_terms = [
-        *mentor.interests,
-        *mentor.experience_tags,
-        mentor.faculty,
+MENTOR_STOP_WORDS = STOP_WORDS | {
+    "area",
+    "areas",
+    "available",
+    "based",
+    "build",
+    "connect",
+    "experience",
+    "experiences",
+    "explore",
+    "find",
+    "goal",
+    "goals",
+    "guide",
+    "looking",
+    "major",
+    "minor",
+    "nus",
+    "programme",
+    "role",
+    "senior",
+    "year",
+    "years",
+}
+SHORT_MEANINGFUL_MENTOR_TOKENS = {"ai", "ml", "ui", "ux"}
+
+
+def meaningful_mentor_tokens(*values: str) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        for token in normalise_keyword(value).split():
+            normalised = singular_keyword(token)
+            if (
+                (len(normalised) >= 3 or normalised in SHORT_MEANINGFUL_MENTOR_TOKENS)
+                and not normalised.isdigit()
+                and normalised not in MENTOR_STOP_WORDS
+            ):
+                tokens.add(normalised)
+    return tokens
+
+
+def mentor_search_terms(mentor: Mentor) -> set[str]:
+    return meaningful_mentor_tokens(
+        mentor.name,
+        mentor.mentor_type_label,
         mentor.programme,
+        mentor.faculty,
         mentor.role,
         mentor.bio,
-        *mentor.experience,
-    ]
-    matched_terms = {
-        normalise_keyword(term)
-        for term in query_terms
-        if any(keyword_term_matches(term, value) for value in mentor_terms)
-    }
-    score = 35 + min(45, len(matched_terms) * 7)
-    if request.faculty and request.faculty == mentor.faculty:
+        *(mentor.interests or []),
+        *(mentor.experience_tags or []),
+        *(mentor.experience or []),
+    )
+
+
+def profile_search_terms(request: RecommendationRequest) -> set[str]:
+    return meaningful_mentor_tokens(
+        request.faculty or "",
+        request.bio or "",
+        *(request.interests or []),
+        *(request.goals or []),
+    )
+
+
+GOAL_STOP_WORDS = STOP_WORDS | {
+    "field",
+    "fields",
+    "find",
+    "goal",
+    "goals",
+    "help",
+    "looking",
+    "opportunity",
+    "opportunities",
+    "project",
+    "projects",
+}
+
+
+def meaningful_goal_tokens(*values: str) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        for token in normalise_keyword(value).split():
+            normalised = singular_keyword(token)
+            if (
+                (len(normalised) >= 3 or normalised in SHORT_MEANINGFUL_MENTOR_TOKENS)
+                and not normalised.isdigit()
+                and token not in GOAL_STOP_WORDS
+                and normalised not in GOAL_STOP_WORDS
+            ):
+                tokens.add(normalised)
+    return tokens
+
+
+def mentor_goal_target_terms(mentor: UserRecord) -> set[str]:
+    return meaningful_goal_tokens(
+        mentor.faculty,
+        mentor.department or "",
+        mentor.major,
+        mentor.bio or "",
+        mentor.mentorship_goals or "",
+        mentor.current_role or "",
+        mentor.organisation or "",
+        *(mentor.interests or []),
+        *(mentor.goals or []),
+        *(mentor.modules_taken or []),
+        *(mentor.modules_taught or []),
+        *(mentor.ccas or []),
+        *(mentor.nus_opportunities or []),
+        *(mentor.exchange_universities or []),
+        *(mentor.areas_of_expertise or []),
+    )
+
+
+def goal_text_relevance(query: str, target_terms: set[str]) -> float:
+    query_terms = meaningful_goal_tokens(query)
+    if not query_terms or not target_terms:
+        return 0.0
+    overlap = query_terms & target_terms
+    return min(1.0, len(overlap) / max(3, min(len(query_terms), len(target_terms))))
+
+
+def recommendation_query_terms(request: RecommendationRequest) -> list[str]:
+    return sorted(profile_search_terms(request))
+
+
+def score_mentor(mentor: Mentor, request: RecommendationRequest) -> int:
+    query_terms = profile_search_terms(request)
+    mentor_terms = mentor_search_terms(mentor)
+    score = round(token_overlap_score(query_terms, mentor_terms) * 48)
+
+    for phrases, weight in [
+        (request.interests or [], 16),
+        (request.goals or [], 14),
+        ([request.bio or ""], 10),
+    ]:
+        if any(
+            meaningful_mentor_tokens(phrase) & mentor_terms
+            for phrase in phrases
+            if phrase
+        ):
+            score += weight
+
+    if request.faculty and request.faculty.lower() == mentor.faculty.lower():
         score += 10
-    if matched_terms and any(
-        keyword_term_matches(request.faculty or "", value)
-        for value in [mentor.faculty, mentor.programme]
+    if meaningful_mentor_tokens(request.faculty or "") & meaningful_mentor_tokens(
+        mentor.programme, mentor.faculty
     ):
         score += 4
-    return min(99, score)
+    return max(0, min(99, score))
 
 
 def match_reasons(mentor: Mentor, request: RecommendationRequest) -> list[str]:
-    profile_terms = [term for term in request.interests + request.goals if term]
-    mentor_terms = (
-        mentor.interests
-        + mentor.experience_tags
-        + [mentor.programme, mentor.faculty, mentor.bio, *mentor.experience]
-    )
-    reasons = []
-    seen_terms = set()
-    for term in profile_terms:
-        normalised = normalise_keyword(term)
-        if normalised in seen_terms:
-            continue
-        if any(keyword_term_matches(term, value) for value in mentor_terms):
-            reasons.append(f"Matches your profile term: {term}")
-            seen_terms.add(normalised)
-    if request.faculty and request.faculty == mentor.faculty:
+    profile_terms = profile_search_terms(request)
+    mentor_terms = mentor_search_terms(mentor)
+    shared_terms = sorted(profile_terms & mentor_terms)
+    reasons: list[str] = []
+    for label, values in [
+        ("Interest", request.interests or []),
+        ("Goal", request.goals or []),
+    ]:
+        match = next(
+            (
+                value
+                for value in values
+                if meaningful_mentor_tokens(value) & mentor_terms
+            ),
+            None,
+        )
+        if match:
+            reasons.append(f"{label} appears relevant: {match}")
+    if request.bio and meaningful_mentor_tokens(request.bio) & mentor_terms:
+        reasons.append("About section overlaps with this mentor's experience")
+    if request.faculty and request.faculty.lower() == mentor.faculty.lower():
         reasons.append(f"Same faculty: {mentor.faculty}")
+    if shared_terms and len(reasons) < 3:
+        pretty_terms = [
+            term.upper() if term in {"ai", "ml", "ux", "ui"} else term
+            for term in shared_terms[:4]
+        ]
+        reasons.append("Shared meaningful terms: " + ", ".join(pretty_terms))
     if not reasons:
         reasons.append(
-            "Limited direct keyword overlap; compare profile details before connecting"
+            "Limited direct profile overlap; compare profile details before connecting"
         )
     return reasons[:3]
 
@@ -795,6 +1004,7 @@ def recommendation_request_from_user(user: UserRecord) -> RecommendationRequest:
             *(user.nus_opportunities or []),
             *(user.exchange_universities or []),
         ],
+        bio=user.bio or "",
         faculty=user.faculty,
         minimum_score=0,
     )
@@ -1144,6 +1354,16 @@ def ai_ranked_mentors(
             if active_query_model == embedding_record.model
             else 0.0
         )
+        goal_relevance = (
+            goal_text_relevance(query_text or "", mentor_goal_target_terms(mentor_user))
+            if mode == "goal"
+            else 0.0
+        )
+        goal_signal = (
+            max(semantic, (semantic * 0.35) + (goal_relevance * 0.65))
+            if mode == "goal"
+            else semantic
+        )
         profile_semantic = (
             max(
                 0.0,
@@ -1158,15 +1378,19 @@ def ai_ranked_mentors(
         overlap = structured_overlap(student, mentor_user)
         completeness = profile_completeness(mentor_user)
         faculty_boost = 1.0 if student.faculty == mentor_user.faculty else 0.0
-        final_score = round(
-            weighted_match_score(
-                semantic=semantic,
-                structured=overlap,
-                faculty=faculty_boost,
-                completeness=completeness,
-                weights=weights,
+        final_score = (
+            round(goal_signal * 100)
+            if mode == "goal"
+            else round(
+                weighted_match_score(
+                    semantic=semantic,
+                    structured=overlap,
+                    faculty=faculty_boost,
+                    completeness=completeness,
+                    weights=weights,
+                )
+                * 100
             )
-            * 100
         )
         bounded_score = max(0, min(99, final_score))
         profile_score = max(
@@ -1198,15 +1422,26 @@ def ai_ranked_mentors(
                 student,
                 mentor_user,
                 mode,
-                semantic,
+                goal_signal,
                 overlap,
                 query=query_text,
             ),
             "match_score_breakdown": MatchScoreBreakdown(
-                semantic=score_component(semantic, weights.semantic),
-                structured=score_component(overlap, weights.structured),
-                faculty=score_component(faculty_boost, weights.faculty),
-                completeness=score_component(completeness, weights.completeness),
+                semantic=score_component(
+                    goal_signal, 1.0 if mode == "goal" else weights.semantic
+                ),
+                structured=score_component(
+                    0.0 if mode == "goal" else overlap,
+                    0.0 if mode == "goal" else weights.structured,
+                ),
+                faculty=score_component(
+                    0.0 if mode == "goal" else faculty_boost,
+                    0.0 if mode == "goal" else weights.faculty,
+                ),
+                completeness=score_component(
+                    0.0 if mode == "goal" else completeness,
+                    0.0 if mode == "goal" else weights.completeness,
+                ),
                 total=bounded_score,
             ),
             "embedding_model": active_query_model,
@@ -1226,9 +1461,576 @@ def ai_ranked_mentors(
     return sorted(ranked, key=lambda item: item.match_score, reverse=True)
 
 
+def clean_string_list(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for value in values:
+        item = value.strip()
+        key = item.lower()
+        if item and key not in seen:
+            seen.add(key)
+            cleaned.append(item)
+    return cleaned
+
+
+OPPORTUNITY_STOP_WORDS = STOP_WORDS | {
+    "based",
+    "brief",
+    "campus",
+    "check",
+    "detail",
+    "details",
+    "experience",
+    "experiences",
+    "explore",
+    "field",
+    "fields",
+    "find",
+    "goal",
+    "goals",
+    "intro",
+    "join",
+    "learn",
+    "learning",
+    "make",
+    "minor",
+    "module",
+    "modules",
+    "needed",
+    "nus",
+    "open",
+    "opportunity",
+    "opportunities",
+    "page",
+    "post",
+    "posts",
+    "profile",
+    "quick",
+    "section",
+    "suited",
+    "university",
+    "use",
+    "user",
+    "users",
+    "all",
+}
+SHORT_MEANINGFUL_OPPORTUNITY_TOKENS = {"ai", "ml", "ui", "ux"}
+
+
+def meaningful_opportunity_tokens(*values: str) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        for token in normalise_keyword(value).split():
+            normalised = singular_keyword(token)
+            if (
+                (len(normalised) >= 3 or normalised in SHORT_MEANINGFUL_OPPORTUNITY_TOKENS)
+                and not normalised.isdigit()
+                and normalised not in OPPORTUNITY_STOP_WORDS
+            ):
+                tokens.add(normalised)
+    return tokens
+
+
+def meaningful_profile_terms(student: UserRecord, *, query: str = "") -> set[str]:
+    return meaningful_opportunity_tokens(
+        student.faculty,
+        student.major,
+        student.bio or "",
+        *(student.interests or []),
+        *(student.goals or []),
+        *(student.modules_taken or []),
+        *(student.ccas or []),
+        *(student.nus_opportunities or []),
+        *(student.exchange_universities or []),
+        query,
+    )
+
+
+def meaningful_opportunity_terms(opportunity: OpportunityRecord) -> set[str]:
+    return meaningful_opportunity_tokens(
+        opportunity.category,
+        opportunity.title,
+        opportunity.organisation,
+        opportunity.summary,
+        opportunity.description,
+        opportunity.faculty or "",
+        opportunity.commitment or "",
+        opportunity.location or "",
+        *(opportunity.target_years or []),
+        *(opportunity.relevant_majors or []),
+        *(opportunity.tags or []),
+        *(opportunity.skills or []),
+        *(opportunity.details or []),
+    )
+
+
+def opportunity_goal_target_terms(opportunity: OpportunityRecord) -> set[str]:
+    return meaningful_goal_tokens(
+        opportunity.category,
+        opportunity.title,
+        opportunity.organisation,
+        opportunity.summary,
+        opportunity.description,
+        opportunity.faculty or "",
+        opportunity.commitment or "",
+        opportunity.location or "",
+        *(opportunity.target_years or []),
+        *(opportunity.relevant_majors or []),
+        *(opportunity.tags or []),
+        *(opportunity.skills or []),
+        *(opportunity.details or []),
+    )
+
+
+def token_overlap_score(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    overlap = left & right
+    # Reward meaningful overlap without letting long generic profiles dominate.
+    return min(1.0, len(overlap) / max(3, min(len(left), len(right))))
+
+
+def phrase_in_opportunity(phrase: str, opportunity: OpportunityRecord) -> bool:
+    normalised = normalise_keyword(phrase)
+    if not normalised or normalised in OPPORTUNITY_STOP_WORDS:
+        return False
+    phrase_tokens = meaningful_opportunity_tokens(phrase)
+    if not phrase_tokens:
+        return False
+    if len(phrase_tokens) == 1:
+        return next(iter(phrase_tokens)) in meaningful_opportunity_terms(opportunity)
+    searchable = normalise_keyword(opportunity_text(opportunity))
+    return normalised in searchable
+
+
+def opportunity_from_record(record: OpportunityRecord) -> OpportunityPublic:
+    return OpportunityPublic(
+        id=record.id,
+        poster_id=record.poster_id,
+        poster_name=record.poster_name,
+        poster_role=record.poster_role,  # type: ignore[arg-type]
+        category=record.category,  # type: ignore[arg-type]
+        title=record.title,
+        organisation=record.organisation,
+        summary=record.summary,
+        description=record.description,
+        faculty=record.faculty,
+        location=record.location,
+        commitment=record.commitment,
+        start_date=record.start_date,
+        end_date=record.end_date,
+        deadline=record.deadline,
+        application_url=record.application_url,
+        contact_email=record.contact_email,
+        target_years=record.target_years or [],
+        relevant_majors=record.relevant_majors or [],
+        tags=record.tags or [],
+        skills=record.skills or [],
+        details=record.details or [],
+        is_verified=record.is_verified,
+        created_at=record.created_at.isoformat(),
+    )
+
+
+def opportunity_text(record: OpportunityRecord) -> str:
+    return "\n".join(
+        [
+            f"Opportunity category: {record.category}",
+            f"Title: {record.title}",
+            f"Organisation: {record.organisation}",
+            f"Faculty: {record.faculty or ''}",
+            f"Summary: {record.summary}",
+            f"Description: {record.description}",
+            f"Commitment: {record.commitment or ''}",
+            f"Location: {record.location or ''}",
+            f"Target years: {', '.join(record.target_years or [])}",
+            f"Relevant majors: {', '.join(record.relevant_majors or [])}",
+            f"Tags: {', '.join(record.tags or [])}",
+            f"Skills: {', '.join(record.skills or [])}",
+            f"Details: {', '.join(record.details or [])}",
+        ]
+    )
+
+
+def upsert_opportunity_embedding(
+    opportunity: OpportunityRecord, db: Session
+) -> ProfileEmbeddingRecord:
+    source_text = opportunity_text(opportunity)
+    embedding, model = embed_text(source_text)
+    embedding_id = f"{opportunity.id}_opportunity"
+    record = db.get(ProfileEmbeddingRecord, embedding_id)
+    if record is None:
+        record = ProfileEmbeddingRecord(
+            id=embedding_id,
+            user_id=opportunity.poster_id,
+            role="opportunity",
+            embedding_type="opportunity",
+            model=model,
+            source_text=source_text,
+            embedding=embedding,
+        )
+        db.add(record)
+    else:
+        record.user_id = opportunity.poster_id
+        record.role = "opportunity"
+        record.model = model
+        record.source_text = source_text
+        record.embedding = embedding
+    db.flush()
+    return record
+
+
+def ensure_opportunity_embedding(
+    opportunity: OpportunityRecord, db: Session
+) -> ProfileEmbeddingRecord:
+    record = db.get(ProfileEmbeddingRecord, f"{opportunity.id}_opportunity")
+    source_text = opportunity_text(opportunity)
+    if (
+        record is None
+        or record.source_text != source_text
+        or record.model != expected_embedding_model()
+    ):
+        return upsert_opportunity_embedding(opportunity, db)
+    return record
+
+
+def opportunity_structured_overlap(
+    student: UserRecord, opportunity: OpportunityRecord
+) -> float:
+    score = 0.0
+    available_weight = 0.0
+
+    if opportunity.faculty:
+        available_weight += 0.15
+        if opportunity.faculty.lower() == student.faculty.lower():
+            score += 0.15
+    if opportunity.relevant_majors:
+        available_weight += 0.15
+        major_tokens = meaningful_opportunity_tokens(*opportunity.relevant_majors)
+        if meaningful_opportunity_tokens(student.major) & major_tokens:
+            score += 0.15
+
+    list_checks = [
+        (
+            student.interests or [],
+            (opportunity.tags or []) + (opportunity.skills or []),
+            0.24,
+        ),
+        (
+            student.modules_taken or [],
+            (opportunity.tags or []) + (opportunity.details or []),
+            0.12,
+        ),
+        (
+            student.ccas or [],
+            (opportunity.tags or []) + [opportunity.organisation],
+            0.10,
+        ),
+        (
+            student.nus_opportunities or [],
+            (opportunity.tags or []) + [opportunity.title, opportunity.summary],
+            0.12,
+        ),
+        (
+            [student.bio or "", *(student.goals or [])],
+            (opportunity.skills or [])
+            + (opportunity.tags or [])
+            + [opportunity.summary, opportunity.description],
+            0.22,
+        ),
+    ]
+    for left_items, right_items, weight in list_checks:
+        left = meaningful_opportunity_tokens(*left_items)
+        right = meaningful_opportunity_tokens(*right_items)
+        if left and right:
+            available_weight += weight
+            score += weight * token_overlap_score(left, right)
+
+    return max(0.0, min(1.0, score / available_weight)) if available_weight else 0.0
+
+
+def opportunity_completeness(opportunity: OpportunityRecord) -> float:
+    fields = [
+        opportunity.title,
+        opportunity.organisation,
+        opportunity.summary,
+        opportunity.description,
+        opportunity.faculty,
+        opportunity.commitment,
+        opportunity.deadline,
+        opportunity.target_years,
+        opportunity.relevant_majors,
+        opportunity.tags,
+        opportunity.skills,
+    ]
+    return sum(1 for field in fields if field) / len(fields)
+
+
+def opportunity_profile_match_score(
+    student: UserRecord, opportunity: OpportunityRecord, db: Session
+) -> int:
+    student_embedding = ensure_profile_embedding(student, db)
+    opportunity_embedding = ensure_opportunity_embedding(opportunity, db)
+    semantic = (
+        max(0.0, cosine_similarity(student_embedding.embedding, opportunity_embedding.embedding))
+        if student_embedding.model == opportunity_embedding.model
+        else 0.0
+    )
+    overlap = opportunity_structured_overlap(student, opportunity)
+    faculty_boost = (
+        1.0
+        if opportunity.faculty and opportunity.faculty.lower() == student.faculty.lower()
+        else 0.0
+    )
+    score = weighted_match_score(
+        semantic=semantic,
+        structured=overlap,
+        faculty=faculty_boost,
+        completeness=opportunity_completeness(opportunity),
+        weights=matching_weights(),
+    )
+    return max(0, min(99, round(score * 100)))
+
+
+def standard_opportunity_score(
+    opportunity: OpportunityRecord, student: UserRecord, query: str = ""
+) -> int:
+    profile_tokens = meaningful_profile_terms(student, query=query)
+    opportunity_tokens = meaningful_opportunity_terms(opportunity)
+    overlap = profile_tokens & opportunity_tokens
+
+    score = round(token_overlap_score(profile_tokens, opportunity_tokens) * 48)
+    phrase_groups = [
+        (student.interests or [], 16),
+        (student.goals or [], 14),
+        (student.nus_opportunities or [], 14),
+        (student.ccas or [], 8),
+        (student.modules_taken or [], 6),
+    ]
+    for phrases, weight in phrase_groups:
+        if any(phrase_in_opportunity(phrase, opportunity) for phrase in phrases):
+            score += weight
+
+    if opportunity.faculty and opportunity.faculty.lower() == student.faculty.lower():
+        score += 10
+    if opportunity.relevant_majors:
+        major_tokens = meaningful_opportunity_tokens(student.major)
+        opportunity_major_tokens = meaningful_opportunity_tokens(
+            *(opportunity.relevant_majors or [])
+        )
+        if major_tokens & opportunity_major_tokens:
+            score += 12
+    query_overlap = meaningful_opportunity_tokens(query) & opportunity_tokens
+    if query_overlap:
+        score += min(10, len(query_overlap) * 3)
+    return max(0, min(99, score))
+
+
+def opportunity_match_reasons(
+    opportunity: OpportunityRecord,
+    student: UserRecord,
+    semantic: float | None = None,
+    overlap: float | None = None,
+    *,
+    query: str = "",
+    mode: str = "standard",
+) -> list[str]:
+    reasons: list[str] = []
+    opportunity_tokens = meaningful_opportunity_terms(opportunity)
+    if mode == "goal":
+        if query:
+            query_hits = sorted(meaningful_opportunity_tokens(query) & opportunity_tokens)
+            if query_hits:
+                reasons.append("Goal terms found: " + ", ".join(query_hits[:3]))
+        if semantic is not None:
+            reasons.append(
+                f"Measured typed-goal fit: {round(max(0, min(1, semantic)) * 100)}% goal relevance"
+            )
+        return reasons or ["No direct goal terms found; ranked by semantic similarity"]
+
+    profile_tokens = meaningful_profile_terms(student, query=query)
+    shared_tokens = sorted(profile_tokens & opportunity_tokens)
+    for label, values in [
+        ("Interest", student.interests or []),
+        ("Goal", student.goals or []),
+        ("NUS opportunity", student.nus_opportunities or []),
+        ("CCA or activity", student.ccas or []),
+        ("Module", student.modules_taken or []),
+    ]:
+        match = next((value for value in values if phrase_in_opportunity(value, opportunity)), None)
+        if match:
+            reasons.append(f"{label} appears relevant: {match}")
+    if opportunity.faculty and opportunity.faculty.lower() == student.faculty.lower():
+        reasons.append(f"Faculty fit: {opportunity.faculty}")
+    if opportunity.relevant_majors:
+        major_tokens = meaningful_opportunity_tokens(student.major)
+        opportunity_major_tokens = meaningful_opportunity_tokens(
+            *(opportunity.relevant_majors or [])
+        )
+        if major_tokens & opportunity_major_tokens:
+            reasons.append(f"Major fit: {student.major}")
+    if shared_tokens and len(reasons) < 3:
+        pretty_tokens = [token.upper() if token in {"ai", "noc", "urop"} else token for token in shared_tokens[:4]]
+        reasons.append("Shared meaningful terms: " + ", ".join(pretty_tokens))
+    if query:
+        query_hits = sorted(meaningful_opportunity_tokens(query) & opportunity_tokens)
+        if query_hits:
+            reasons.append("Goal terms found: " + ", ".join(query_hits[:3]))
+    if semantic is not None and overlap is not None:
+        label = "goal description" if mode == "goal" else "complete profile"
+        measured_reason = (
+            f"Measured {label} fit: {round(max(0, min(1, semantic)) * 100)}% "
+            f"semantic similarity and {round(max(0, min(1, overlap)) * 100)}% structured overlap"
+        )
+        return [*reasons[:3], measured_reason]
+    reasons.append("Verified post from a mentor" if opportunity.is_verified else "Unverified student-submitted opportunity")
+    return reasons[:4]
+
+
+def opportunity_score_component(score: float, weight: float) -> MatchScoreComponent:
+    bounded = max(0.0, min(1.0, score))
+    return MatchScoreComponent(
+        score=round(bounded * 100),
+        weight=round(weight * 100),
+        weighted_points=round(bounded * weight * 100, 1),
+    )
+
+
+def ai_ranked_opportunities(
+    student: UserRecord,
+    query_embedding: list[float],
+    db: Session,
+    mode: str,
+    minimum_score: int = 0,
+    *,
+    query_model: str,
+    query_text: str = "",
+) -> list[OpportunityPublic]:
+    opportunities = db.scalars(
+        select(OpportunityRecord).order_by(OpportunityRecord.created_at.desc())
+    ).all()
+    student_profile_embedding = ensure_profile_embedding(student, db)
+    weights = matching_weights()
+    ranked: list[OpportunityPublic] = []
+    for opportunity in opportunities:
+        embedding_record = ensure_opportunity_embedding(opportunity, db)
+        semantic = (
+            max(0.0, cosine_similarity(query_embedding, embedding_record.embedding))
+            if query_model == embedding_record.model
+            else 0.0
+        )
+        goal_relevance = (
+            goal_text_relevance(query_text, opportunity_goal_target_terms(opportunity))
+            if mode == "goal"
+            else 0.0
+        )
+        goal_signal = (
+            max(semantic, (semantic * 0.35) + (goal_relevance * 0.65))
+            if mode == "goal"
+            else semantic
+        )
+        profile_semantic = (
+            max(0.0, cosine_similarity(student_profile_embedding.embedding, embedding_record.embedding))
+            if student_profile_embedding.model == embedding_record.model
+            else 0.0
+        )
+        overlap = opportunity_structured_overlap(student, opportunity)
+        faculty_boost = (
+            1.0
+            if opportunity.faculty and opportunity.faculty.lower() == student.faculty.lower()
+            else 0.0
+        )
+        completeness = opportunity_completeness(opportunity)
+        score = (
+            round(goal_signal * 100)
+            if mode == "goal"
+            else round(
+                weighted_match_score(
+                    semantic=semantic,
+                    structured=overlap,
+                    faculty=faculty_boost,
+                    completeness=completeness,
+                    weights=weights,
+                )
+                * 100
+            )
+        )
+        bounded_score = max(0, min(99, score))
+        profile_score = max(
+            0,
+            min(
+                99,
+                round(
+                    weighted_match_score(
+                        semantic=profile_semantic,
+                        structured=overlap,
+                        faculty=faculty_boost,
+                        completeness=completeness,
+                        weights=weights,
+                    )
+                    * 100
+                ),
+            ),
+        )
+        keyword_score = standard_opportunity_score(opportunity, student, query_text)
+        item = opportunity_from_record(opportunity).model_copy(
+            update={
+                "match_score": bounded_score,
+                "keyword_match_score": keyword_score,
+                "profile_match_score": (
+                    bounded_score
+                    if mode == "profile"
+                    else None
+                    if mode == "goal"
+                    else profile_score
+                ),
+                "goal_match_score": bounded_score if mode == "goal" else None,
+                "match_label": "Complete profile match" if mode == "profile" else "Goal match",
+                "match_reasons": opportunity_match_reasons(
+                    opportunity,
+                    student,
+                    goal_signal,
+                    overlap,
+                    query=query_text,
+                    mode=mode,
+                ),
+                "match_score_breakdown": MatchScoreBreakdown(
+                    semantic=opportunity_score_component(
+                        goal_signal, 1.0 if mode == "goal" else weights.semantic
+                    ),
+                    structured=opportunity_score_component(
+                        0.0 if mode == "goal" else overlap,
+                        0.0 if mode == "goal" else weights.structured,
+                    ),
+                    faculty=opportunity_score_component(
+                        0.0 if mode == "goal" else faculty_boost,
+                        0.0 if mode == "goal" else weights.faculty,
+                    ),
+                    completeness=opportunity_score_component(
+                        0.0 if mode == "goal" else completeness,
+                        0.0 if mode == "goal" else weights.completeness,
+                    ),
+                    total=bounded_score,
+                ),
+                "embedding_model": query_model,
+                "embedding_provider": "local" if query_model.startswith("local-hashing") else "openai",
+                "embedding_fallback": query_model.startswith("local-hashing"),
+            }
+        )
+        if item.match_score >= minimum_score:
+            ranked.append(item)
+    db.commit()
+    return sorted(ranked, key=lambda item: item.match_score, reverse=True)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/readiness")
+def readiness(db: Session = Depends(get_db)) -> dict[str, object]:
+    return readiness_report(db)
 
 
 @app.put("/auth/profile", response_model=UserPublic)
@@ -1605,6 +2407,154 @@ def ai_goal_search(
         )
     embedding, model = embed_text(goal_search_text(student, payload.query))
     return ai_ranked_mentors(
+        student,
+        embedding,
+        db,
+        mode="goal",
+        minimum_score=payload.minimum_score,
+        query_model=model,
+        query_text=payload.query,
+    )
+
+
+@app.get("/opportunities", response_model=list[OpportunityPublic])
+def list_opportunities(db: Session = Depends(get_db)) -> list[OpportunityPublic]:
+    records = db.scalars(
+        select(OpportunityRecord).order_by(OpportunityRecord.created_at.desc())
+    ).all()
+    return [opportunity_from_record(record) for record in records]
+
+
+@app.post("/opportunities", response_model=OpportunityPublic)
+def create_opportunity(
+    payload: OpportunityCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> OpportunityPublic:
+    user = get_user_from_token(authorization, db)
+    values = payload.model_dump()
+    opportunity = OpportunityRecord(
+        id=f"op_{uuid4().hex[:10]}",
+        poster_id=user.id,
+        poster_name=user.name,
+        poster_role=user.role,
+        is_verified=user.role == "mentor",
+        target_years=clean_string_list(values.pop("target_years")),
+        relevant_majors=clean_string_list(values.pop("relevant_majors")),
+        tags=clean_string_list(values.pop("tags")),
+        skills=clean_string_list(values.pop("skills")),
+        details=clean_string_list(values.pop("details")),
+        **values,
+    )
+    db.add(opportunity)
+    db.flush()
+    upsert_opportunity_embedding(opportunity, db)
+    db.commit()
+    db.refresh(opportunity)
+    return opportunity_from_record(opportunity)
+
+
+@app.patch("/opportunities/{opportunity_id}", response_model=OpportunityPublic)
+def update_opportunity(
+    opportunity_id: str,
+    payload: OpportunityCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> OpportunityPublic:
+    user = get_user_from_token(authorization, db)
+    opportunity = db.get(OpportunityRecord, opportunity_id)
+    if opportunity is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    if opportunity.poster_id != user.id:
+        raise HTTPException(
+            status_code=403, detail="Only the original poster can edit this opportunity"
+        )
+    values = payload.model_dump()
+    opportunity.target_years = clean_string_list(values.pop("target_years"))
+    opportunity.relevant_majors = clean_string_list(values.pop("relevant_majors"))
+    opportunity.tags = clean_string_list(values.pop("tags"))
+    opportunity.skills = clean_string_list(values.pop("skills"))
+    opportunity.details = clean_string_list(values.pop("details"))
+    for key, value in values.items():
+        setattr(opportunity, key, value)
+    opportunity.is_verified = user.role == "mentor"
+    opportunity.updated_at = datetime.now(timezone.utc)
+    db.flush()
+    upsert_opportunity_embedding(opportunity, db)
+    db.commit()
+    db.refresh(opportunity)
+    return opportunity_from_record(opportunity)
+
+
+@app.post("/opportunities/recommendations", response_model=list[OpportunityPublic])
+def opportunity_recommendations(
+    payload: OpportunitySearchRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[OpportunityPublic]:
+    student = get_user_from_token(authorization, db)
+    if student.role != "student":
+        raise HTTPException(
+            status_code=403, detail="Only students can request opportunity matches"
+        )
+    query = select(OpportunityRecord).order_by(OpportunityRecord.created_at.desc())
+    records = db.scalars(query).all()
+    ranked: list[OpportunityPublic] = []
+    selected_categories = set(payload.categories)
+    for opportunity in records:
+        if selected_categories and opportunity.category not in selected_categories:
+            continue
+        score = standard_opportunity_score(opportunity, student, payload.query)
+        profile_score = opportunity_profile_match_score(student, opportunity, db)
+        item = opportunity_from_record(opportunity).model_copy(
+            update={
+                "match_score": score,
+                "keyword_match_score": score,
+                "profile_match_score": profile_score,
+                "match_label": "Keyword match",
+                "match_reasons": opportunity_match_reasons(
+                    opportunity, student, query=payload.query
+                ),
+            }
+        )
+        if item.match_score >= payload.minimum_score:
+            ranked.append(item)
+    db.commit()
+    return sorted(ranked, key=lambda item: item.match_score, reverse=True)
+
+
+@app.post("/opportunities/ai/profile-match", response_model=list[OpportunityPublic])
+def opportunity_ai_profile_match(
+    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
+) -> list[OpportunityPublic]:
+    student = get_user_from_token(authorization, db)
+    if student.role != "student":
+        raise HTTPException(
+            status_code=403, detail="Only students can request opportunity matches"
+        )
+    student_embedding = ensure_profile_embedding(student, db)
+    return ai_ranked_opportunities(
+        student,
+        student_embedding.embedding,
+        db,
+        mode="profile",
+        query_model=student_embedding.model,
+    )
+
+
+@app.post("/opportunities/ai/goal-search", response_model=list[OpportunityPublic])
+def opportunity_ai_goal_search(
+    payload: GoalSearchRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[OpportunityPublic]:
+    student = get_user_from_token(authorization, db)
+    if student.role != "student":
+        raise HTTPException(
+            status_code=403, detail="Only students can search for opportunities"
+        )
+    embedding, model = embed_text(goal_search_text(student, payload.query))
+    return ai_ranked_opportunities(
         student,
         embedding,
         db,
@@ -2013,7 +2963,11 @@ def mark_conversation_read(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     role = conversation_role(conversation, user)
-    set_conversation_last_read_at(conversation, role, datetime.now(timezone.utc))
+    latest_message_at = max(
+        (message.created_at for message in conversation.messages),
+        default=datetime.now(timezone.utc),
+    )
+    set_conversation_last_read_at(conversation, role, latest_message_at)
     db.commit()
     db.refresh(conversation)
     return conversation_from_record(conversation, user)

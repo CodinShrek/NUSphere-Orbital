@@ -286,7 +286,7 @@ export function FindMentors({
           <div className="space-y-5">
             {aiMode !== "standard" && aiLoading && <MatchLoadingState mode={aiMode} />}
             {!aiLoading && displayedMentors.map((mentor) => (
-                <MentorCard key={mentor.id} mentor={mentor} connection={connectionForMentor(mentor.id)} onProfile={() => onOpenMentorProfile(mentor.id)} onConnect={() => onRequestConnection(mentor.id)} onMessage={() => onStartConversation(mentor.id)} />
+                <MentorCard key={mentor.id} mentor={mentor} mode={aiMode} connection={connectionForMentor(mentor.id)} onProfile={() => onOpenMentorProfile(mentor.id)} onConnect={() => onRequestConnection(mentor.id)} onMessage={() => onStartConversation(mentor.id)} />
             ))}
             {aiMode === "goal" && !aiLoading && !aiError && !aiHasRun && (
               <div className="card p-8 text-center">
@@ -309,7 +309,7 @@ export function FindMentors({
 }
 
 
-function MentorCard({ mentor, connection, onProfile, onConnect, onMessage }: { mentor: Mentor; connection?: Connection; onProfile: () => void; onConnect: () => void; onMessage: () => void }) {
+function MentorCard({ mentor, mode, connection, onProfile, onConnect, onMessage }: { mentor: Mentor; mode: "standard" | "profile" | "goal"; connection?: Connection; onProfile: () => void; onConnect: () => void; onMessage: () => void }) {
   return (
     <article className="card p-6">
       <div className="flex items-start gap-5">
@@ -327,9 +327,9 @@ function MentorCard({ mentor, connection, onProfile, onConnect, onMessage }: { m
             <Score score={mentor.match_score} label={mentor.match_label} />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            {mentor.keyword_match_score !== undefined && <Score score={mentor.keyword_match_score} label="Keyword match" compact />}
-            {mentor.profile_match_score !== undefined ? <Score score={mentor.profile_match_score} label="Complete profile match" compact /> : <span className="chip bg-[#f1f4f9] text-[#596173]">Complete profile match calculating</span>}
-            {mentor.goal_match_score !== undefined && <Score score={mentor.goal_match_score} label="Goal match" compact />}
+            {mode !== "goal" && mentor.keyword_match_score !== undefined && <Score score={mentor.keyword_match_score} label="Keyword match" compact />}
+            {mode !== "goal" && mentor.profile_match_score !== undefined ? <Score score={mentor.profile_match_score} label="Complete profile match" compact /> : mode !== "goal" && <span className="chip bg-[#f1f4f9] text-[#596173]">Complete profile match calculating</span>}
+            {mode !== "goal" && mentor.goal_match_score !== undefined && <Score score={mentor.goal_match_score} label="Goal match" compact />}
           </div>
           <div className="mt-3 flex items-center gap-2">
             <RatingStars rating={mentor.rating} />

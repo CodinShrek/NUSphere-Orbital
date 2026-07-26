@@ -20,6 +20,12 @@ export type Weekday =
   | "saturday"
   | "sunday";
 export type AvailabilityMode = "online" | "in_person" | "hybrid";
+export type OpportunityCategory =
+  | "event"
+  | "cca"
+  | "project"
+  | "research"
+  | "other";
 
 export type AvailabilitySlotInput = {
   day_of_week: Weekday;
@@ -101,6 +107,64 @@ export type Mentor = {
   match_reasons: string[];
   verification_status: VerificationStatus;
   availability: AvailabilitySlot[];
+};
+
+export type Opportunity = {
+  id: string;
+  poster_id: string;
+  poster_name: string;
+  poster_role: Role;
+  category: OpportunityCategory;
+  title: string;
+  organisation: string;
+  summary: string;
+  description: string;
+  faculty?: string;
+  location?: string;
+  commitment?: string;
+  start_date?: string;
+  end_date?: string;
+  deadline?: string;
+  application_url?: string;
+  contact_email?: string;
+  target_years: string[];
+  relevant_majors: string[];
+  tags: string[];
+  skills: string[];
+  details: string[];
+  is_verified: boolean;
+  created_at: string;
+  match_score: number;
+  keyword_match_score?: number;
+  profile_match_score?: number;
+  goal_match_score?: number;
+  match_label: string;
+  match_reasons: string[];
+  match_score_breakdown?: MatchScoreBreakdown;
+  embedding_model?: string;
+  embedding_provider?: "openai" | "local";
+  embedding_fallback?: boolean;
+};
+
+export type OpportunityCreatePayload = {
+  category: OpportunityCategory;
+  title: string;
+  organisation: string;
+  summary: string;
+  description: string;
+  faculty?: string;
+  location?: string;
+  commitment?: string;
+  start_date?: string;
+  end_date?: string;
+  deadline?: string;
+  application_url?: string;
+  contact_email?: string;
+  target_years: string[];
+  relevant_majors: string[];
+  tags: string[];
+  skills: string[];
+  details: string[];
 };
 
 export type MatchScoreComponent = {

@@ -40,10 +40,20 @@ STOP_WORDS = {
     "have",
     "help",
     "into",
+    "module",
+    "modules",
     "mentor",
+    "mentors",
     "mentoring",
     "mentorship",
+    "need",
+    "needed",
+    "opportunity",
+    "opportunities",
+    "profile",
+    "profiles",
     "student",
+    "students",
     "that",
     "the",
     "their",
@@ -206,18 +216,7 @@ def user_profile_text(user: UserRecord, *, perspective: str) -> str:
 
 
 def goal_search_text(student: UserRecord, query: str) -> str:
-    return "\n".join(
-        [
-            "Student goal-based mentor search",
-            f"Student faculty: {student.faculty}",
-            f"Student department: {student.department or ''}",
-            f"Student programme: {student.major}",
-            f"Student current interests: {', '.join(student.interests or [])}",
-            f"Student current goals: {', '.join(student.goals or [])}",
-            f"Student background: {student.bio or ''}",
-            f"Specific mentor request: {query}",
-        ]
-    )
+    return query.strip()
 
 
 def local_embedding(text: str, dimensions: int | None = None) -> list[float]:
@@ -436,6 +435,27 @@ def match_explanation(
     query: str | None = None,
 ) -> list[str]:
     reasons: list[str] = []
+    if mode == "goal":
+        if query:
+            query_tokens = _meaningful_tokens(query)
+            mentor_tokens = _meaningful_tokens(
+                *(mentor.interests or []),
+                *(mentor.areas_of_expertise or []),
+                *(mentor.modules_taught or []),
+                mentor.mentorship_goals or "",
+                mentor.bio or "",
+            )
+            matching_terms = sorted(query_tokens & mentor_tokens)
+        if matching_terms:
+            reasons.append(
+                "Goal terms found in mentor profile: "
+                + ", ".join(matching_terms[:3])
+            )
+        reasons.append(
+            f"Measured typed-goal fit: {round(_bounded(semantic) * 100)}% goal relevance"
+        )
+        return reasons
+
     shared_interests = _shared_values(
         student.interests or [],
         (mentor.interests or []) + (mentor.areas_of_expertise or []),

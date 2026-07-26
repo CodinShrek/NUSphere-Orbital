@@ -16,6 +16,7 @@ from app.ai_matching import (
     MatchWeights,
     cosine_similarity,
     embed_text,
+    goal_search_text,
     match_explanation,
     matching_weights,
     openai_embedding,
@@ -187,6 +188,24 @@ class ConfigurableScoringTests(unittest.TestCase):
     def test_cosine_similarity_rejects_mismatched_dimensions(self) -> None:
         self.assertEqual(cosine_similarity([1.0, 0.0], [1.0]), 0.0)
 
+    def test_goal_search_text_uses_only_typed_goal(self) -> None:
+        student = make_user(
+            "u_student",
+            "student",
+            faculty="Computing",
+            major="Computer Science",
+            interests=["Artificial Intelligence"],
+            goals=["Build a startup"],
+            bio="Profile context should not be included.",
+        )
+
+        text = goal_search_text(student, "  Find exchange planning mentors.  ")
+
+        self.assertEqual(text, "Find exchange planning mentors.")
+        self.assertNotIn("Computing", text)
+        self.assertNotIn("Artificial Intelligence", text)
+        self.assertNotIn("Profile context", text)
+
     def test_structured_overlap_rewards_documented_shared_signals(self) -> None:
         student = make_user(
             "u_student",
@@ -220,7 +239,7 @@ class ConfigurableScoringTests(unittest.TestCase):
             structured_overlap(student, unrelated),
         )
 
-    def test_explanations_only_claim_observable_evidence(self) -> None:
+    def test_goal_explanations_only_claim_goal_evidence(self) -> None:
         student = make_user(
             "u_student",
             "student",
@@ -248,10 +267,11 @@ class ConfigurableScoringTests(unittest.TestCase):
             query="I want startup guidance",
         )
 
-        self.assertIn("Shared interest: Artificial Intelligence", reasons)
-        self.assertIn("Relevant shared module: CS3244", reasons)
         self.assertTrue(any("startup" in reason.lower() for reason in reasons))
-        self.assertTrue(any("82%" in reason and "64%" in reason for reason in reasons))
+        self.assertTrue(any("82%" in reason for reason in reasons))
+        self.assertFalse(any("Shared interest" in reason for reason in reasons))
+        self.assertFalse(any("Relevant shared module" in reason for reason in reasons))
+        self.assertFalse(any("64%" in reason for reason in reasons))
 
 
 class EmbeddingCacheTests(unittest.TestCase):
@@ -350,10 +370,71 @@ class MatchResponseMetadataTests(unittest.TestCase):
             breakdown = match.match_score_breakdown
             assert breakdown is not None
             self.assertEqual(breakdown.total, match.match_score)
-            self.assertEqual(breakdown.semantic.weight, 55)
-            self.assertEqual(breakdown.structured.weight, 25)
-            self.assertEqual(breakdown.faculty.weight, 10)
-            self.assertEqual(breakdown.completeness.weight, 10)
+            self.assertEqual(breakdown.semantic.weight, 100)
+            self.assertEqual(breakdown.structured.weight, 0)
+            self.assertEqual(breakdown.faculty.weight, 0)
+            self.assertEqual(breakdown.completeness.weight, 0)
+            self.assertEqual(match.match_score, breakdown.semantic.score)
+            self.assertTrue(
+                any("goal relevance" in reason for reason in match.match_reasons)
+            )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small",
+            "OPENAI_EMBEDDING_DIMENSIONS": "12",
+        },
+        clear=True,
+    )
+    def test_goal_search_ranks_business_mentor_for_business_goal(self) -> None:
+        goal = (
+            "I want opportunities in business analytics, consulting, case competitions, "
+            "market research, strategy projects, and data-driven business problem solving."
+        )
+        with Session(self.engine) as db:
+            student = make_user("u_student", "student")
+            aisha = make_user(
+                "u_aisha",
+                "mentor",
+                name="Aisha Tan",
+                faculty="Computing",
+                major="Computer Science",
+                interests=["AI/Machine Learning", "Software Engineering", "NOC"],
+                goals=["Help juniors plan CS modules and project portfolios"],
+                bio="Final-year CS senior who can advise on module planning, Hackers projects, UROP, and preparing for NOC interviews.",
+                mentorship_goals="Support students exploring AI projects, internships, and entrepreneurship pathways.",
+                areas_of_expertise=["AI", "Full-stack projects", "Module planning"],
+            )
+            marcus = make_user(
+                "u_marcus",
+                "mentor",
+                name="Marcus Lee",
+                faculty="Business",
+                major="Business Administration",
+                interests=["Product management", "Startups", "Case competitions"],
+                goals=["Guide students moving from campus projects to product roles"],
+                bio="NUS Business alumnus now in product management, with experience in startup programmes and case competitions.",
+                mentorship_goals="Help students frame their experiences for internships, product roles, and founder pathways.",
+                areas_of_expertise=["Product strategy", "Internship preparation", "Startup validation"],
+            )
+            db.add_all([student, aisha, marcus])
+            db.commit()
+            query_embedding, query_model = embed_text(goal)
+
+            result = ai_ranked_mentors(
+                student,
+                query_embedding,
+                db,
+                mode="goal",
+                query_model=query_model,
+                query_text=goal,
+            )
+
+            self.assertEqual(result[0].name, "Marcus Lee")
+            aisha_result = next(item for item in result if item.name == "Aisha Tan")
+            marcus_result = next(item for item in result if item.name == "Marcus Lee")
+            self.assertGreater(marcus_result.match_score, aisha_result.match_score)
 
 
 if __name__ == "__main__":

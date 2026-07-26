@@ -6,6 +6,9 @@ import type {
   DuplicateQuestionSuggestion,
   Mentor,
   Notification,
+  Opportunity,
+  OpportunityCategory,
+  OpportunityCreatePayload,
   ProfileSyncPayload,
   Question,
   Review,
@@ -29,6 +32,9 @@ export type {
   MentorType,
   Notification,
   NotificationType,
+  Opportunity,
+  OpportunityCategory,
+  OpportunityCreatePayload,
   ProfileSyncPayload,
   Question,
   RegisterPayload,
@@ -105,6 +111,7 @@ export function fetchRecommendations(user: User, minimumScore = 0) {
         ...user.nus_opportunities,
         ...user.exchange_universities,
       ].filter(Boolean),
+      bio: user.bio,
       faculty: user.faculty,
       minimum_score: minimumScore,
     }),
@@ -126,6 +133,79 @@ export function fetchAiGoalMatches(
   minimumScore = 0,
 ) {
   return request<Mentor[]>("/ai/goal-search", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ query, minimum_score: minimumScore }),
+  });
+}
+
+export function fetchOpportunities() {
+  return request<Opportunity[]>("/opportunities");
+}
+
+export function createOpportunity(
+  token: string,
+  payload: OpportunityCreatePayload,
+) {
+  return request<Opportunity>("/opportunities", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateOpportunity(
+  token: string,
+  opportunityId: string,
+  payload: OpportunityCreatePayload,
+) {
+  return request<Opportunity>(`/opportunities/${opportunityId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchOpportunityRecommendations(
+  token: string,
+  query = "",
+  categories: OpportunityCategory[] = [],
+  minimumScore = 0,
+) {
+  return request<Opportunity[]>("/opportunities/recommendations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      query,
+      categories,
+      minimum_score: minimumScore,
+    }),
+  });
+}
+
+export function fetchOpportunityProfileMatches(token: string) {
+  return request<Opportunity[]>("/opportunities/ai/profile-match", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+export function fetchOpportunityGoalMatches(
+  token: string,
+  query: string,
+  minimumScore = 0,
+) {
+  return request<Opportunity[]>("/opportunities/ai/goal-search", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

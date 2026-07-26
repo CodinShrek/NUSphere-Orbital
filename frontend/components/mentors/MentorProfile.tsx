@@ -15,6 +15,7 @@ export function MentorProfile({
   token,
   user,
   setActiveView,
+  returnView = "find",
   onRequestConnection,
   onStartConversation,
   onReviewsChange,
@@ -24,6 +25,7 @@ export function MentorProfile({
   token: string;
   user: User;
   setActiveView: (view: View) => void;
+  returnView?: View;
   onRequestConnection: (mentorId: string) => void;
   onStartConversation: (mentorId: string) => void;
   onReviewsChange: () => Promise<void>;
@@ -110,7 +112,7 @@ export function MentorProfile({
               ))}
             </div>
           </Panel>
-          <button className="h-12 w-full rounded-xl border border-[#a7bdf5] bg-white font-bold text-nusPurple" onClick={() => setActiveView("find")}>Back to mentors</button>
+          <button className="h-12 w-full rounded-xl border border-[#a7bdf5] bg-white font-bold text-nusPurple" onClick={() => setActiveView(returnView)}>{returnView === "home" ? "Back home" : "Back to mentors"}</button>
         </aside>
       </div>
     </section>

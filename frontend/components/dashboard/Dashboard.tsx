@@ -1,5 +1,3 @@
-import { Bot } from "lucide-react";
-
 import { PendingConnectionRequests } from "@/components/dashboard/PendingConnectionRequests";
 import { Panel } from "@/components/ui/Panel";
 import { Metric } from "@/components/ui/Metric";
@@ -23,6 +21,7 @@ export function Dashboard({
   connections,
   conversations,
   setActiveView,
+  onOpenMentorProfile,
   onAcceptConnection,
 }: {
   user: User;
@@ -30,6 +29,7 @@ export function Dashboard({
   connections: Connection[];
   conversations: Conversation[];
   setActiveView: (view: View) => void;
+  onOpenMentorProfile: (mentorId: string) => void;
   onAcceptConnection: (connectionId: string) => void;
 }) {
   const acceptedConnections = connections.filter((connection) => connection.status === "accepted");
@@ -56,9 +56,36 @@ export function Dashboard({
             <div className="space-y-4">
               {acceptedConnections.slice(0, 4).map((connection) => (
                 <div key={connection.id} className="rounded-2xl border border-[#d4dae8] p-4">
-                  <p className="font-black">{user.role === "mentor" ? connection.student_name : connection.mentor_name}</p>
+                  {user.role === "student" ? (
+                    <button
+                      className="text-left font-black text-[#1f2333] underline-offset-4 hover:text-nusPurple hover:underline"
+                      onClick={() => onOpenMentorProfile(connection.mentor_id)}
+                      type="button"
+                    >
+                      {connection.mentor_name}
+                    </button>
+                  ) : (
+                    <p className="font-black">{connection.student_name}</p>
+                  )}
                   <p className="mt-1 font-medium text-[#737b8f]">{connection.mentor_programme}</p>
-                  <button className="mt-3 h-10 rounded-xl bg-nusPurple px-4 font-bold text-white" onClick={() => setActiveView("messages")}>Open messages</button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {user.role === "student" && (
+                      <button
+                        className="h-10 rounded-xl bg-nusPurple px-4 font-bold text-white"
+                        onClick={() => onOpenMentorProfile(connection.mentor_id)}
+                        type="button"
+                      >
+                        View profile
+                      </button>
+                    )}
+                    <button
+                      className="h-10 rounded-xl border border-[#a7bdf5] px-4 font-bold text-nusPurple"
+                      onClick={() => setActiveView("messages")}
+                      type="button"
+                    >
+                      Open messages
+                    </button>
+                  </div>
                 </div>
               ))}
               {!acceptedConnections.length && <p className="font-medium text-[#737b8f]">No accepted connections yet.</p>}
@@ -96,13 +123,6 @@ export function Dashboard({
             {!unreadConversations.length && <p className="font-medium text-[#737b8f]">No unread messages.</p>}
           </Panel>
           <PendingConnectionRequests user={user} connections={user.role === "mentor" ? pendingForMentor : pendingForStudent} onAcceptConnection={onAcceptConnection} />
-          <div className="rounded-[18px] bg-[linear-gradient(135deg,#ff6508,#f04405)] p-6 text-white">
-            <div className="flex items-center gap-2 font-black">
-              <Bot size={20} />
-              AI Assistant
-            </div>
-            <p className="mt-2 text-sm text-white/85">Short NUS context clarifications can live here after Milestone 1.</p>
-          </div>
         </aside>
       </section>
     </>

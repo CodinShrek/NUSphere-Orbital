@@ -51,6 +51,12 @@ export function Nav({
           Find Mentors
         </button>
         <button
+          className={`rounded-lg px-4 py-2 ${activeView === "opportunities" ? "bg-[#f3f0ff] text-nusPurple" : ""}`}
+          onClick={() => setActiveView("opportunities")}
+        >
+          For You
+        </button>
+        <button
           className={`rounded-lg px-4 py-2 ${activeView === "qa" ? "bg-[#f3f0ff] text-nusPurple" : ""}`}
           onClick={() => setActiveView("qa")}
         >

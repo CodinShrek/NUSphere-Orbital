@@ -60,14 +60,20 @@ export function MatchLoadingState({ mode }: { mode: "profile" | "goal" }) {
 
 export function MatchInsights({ mentor }: { mentor: Mentor }) {
   const breakdown = mentor.match_score_breakdown;
+  const isGoalMatch = mentor.match_label === "Goal match";
   const components = breakdown
-    ? ([
-        ["Semantic similarity", breakdown.semantic, "Meaning and intent across the profiles"],
-        ["Structured overlap", breakdown.structured, "Shared interests, modules and experiences"],
-        ["Faculty alignment", breakdown.faculty, "Whether both profiles share a faculty"],
-        ["Profile completeness", breakdown.completeness, "Strength of the mentor profile evidence"],
-      ] as const)
+    ? isGoalMatch
+      ? ([
+          ["Goal relevance", breakdown.semantic, "Meaningful fit to the typed goal"],
+        ] as const)
+      : ([
+          ["Semantic similarity", breakdown.semantic, "Meaning and intent across the profiles"],
+          ["Structured overlap", breakdown.structured, "Shared interests, modules and experiences"],
+          ["Faculty alignment", breakdown.faculty, "Whether both profiles share a faculty"],
+          ["Profile completeness", breakdown.completeness, "Strength of the mentor profile evidence"],
+        ] as const)
     : [];
+  const totalScore = isGoalMatch && breakdown ? breakdown.semantic.score : breakdown?.total;
 
   return (
     <section className="mt-4 overflow-hidden rounded-2xl border border-[#d4dae8] bg-[#f8faff]">
@@ -96,7 +102,7 @@ export function MatchInsights({ mentor }: { mentor: Mentor }) {
                 Each signal is multiplied by its configured weight.
               </p>
             </div>
-            <Score score={breakdown.total} label="Total AI fit" compact />
+            <Score score={totalScore ?? breakdown.total} label="Total AI fit" compact />
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             {components.map(([label, component, description]) => (
