@@ -1,6 +1,6 @@
 # NUSphere
 
-NUSphere is a mentorship, Q&A, messaging and opportunity-discovery web app for NUS students. It helps students find relevant mentors, ask archived university questions, message connected mentors, review guidance quality, and discover personalised events, CCAs, projects, research openings and other campus opportunities.
+NUSphere is a mentorship, Q&A, messaging and opportunity-discovery web app for NUS students. It helps students find relevant mentors, ask archived university questions, message connected mentors, review guidance quality, and discover personalised events, CCAs, projects, research openings and other campus opportunities.  
 
 ## Current Feature Set
 
